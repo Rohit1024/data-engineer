@@ -1,0 +1,5 @@
+interface:
+  display_name: "Setup Teaching Site"
+  short_description: "Scaffold a Zensical teaching environment and custom /teach skill from scratch"
+policy:
+  allow_implicit_invocation: false
