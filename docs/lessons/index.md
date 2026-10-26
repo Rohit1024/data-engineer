@@ -73,3 +73,11 @@ All concepts from the roadmap are organized into structured, progressive modules
 - [x] [0034: Automated PII Masking with Sensitive Data Protection (Cloud DLP)](0034-automated-pii-masking-cloud-dlp.md)
 - [x] [0035: End-to-End Pipeline Observability: Cloud Monitoring, Audit Logs & Lineage](0035-pipeline-observability-lineage.md)
 - [x] [0036: BigQuery FinOps: Cost Monitoring, Slot Reservations & Query Optimization](0036-bigquery-finops-slot-reservations.md)
+
+---
+
+## Module 9: End-to-end implementation labs
+
+- [x] [0037: BigQuery ingestion lab: batch, streaming, CDC, ETL and ELT](0037-bigquery-ingestion-etl-elt-lab.md)
+- [x] [0038: Designing BigQuery ETL architecture: load, transform and export](0038-bigquery-etl-architecture-load-transform-export.md)
+- [x] [0039: Managed Service for Apache Airflow: environments, DAGs and BigQuery orchestration](0039-managed-airflow-environments-dags.md)

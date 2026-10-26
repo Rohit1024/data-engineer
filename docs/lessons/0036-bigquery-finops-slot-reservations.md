@@ -131,4 +131,4 @@ flowchart TD
 
 | Previous Lesson | Curriculum | Next Lesson |
 | :--- | :---: | ---: |
-| [0035: End-to-End Pipeline Observability](0035-pipeline-observability-lineage.md) | [All Lessons (Index)](index.md) | *None (Course Complete)* |
+| [0035: End-to-End Pipeline Observability](0035-pipeline-observability-lineage.md) | [All Lessons (Index)](index.md) | [0037: BigQuery ingestion and ETL/ELT lab](0037-bigquery-ingestion-etl-elt-lab.md) |
