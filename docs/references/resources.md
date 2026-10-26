@@ -66,3 +66,19 @@ Official sources checked for lesson 0039 on 2026-10-26. Examples target Airflow 
 - [Dynamic task mapping](https://airflow.apache.org/docs/apache-airflow/2.10.5/authoring-and-scheduling/dynamic-task-mapping.html)
 - [Google provider GCS sensors](https://airflow.apache.org/docs/apache-airflow-providers-google/stable/_api/airflow/providers/google/cloud/sensors/gcs/index.html)
 - [Google provider BigQuery operators](https://airflow.apache.org/docs/apache-airflow-providers-google/stable/operators/cloud/bigquery.html)
+
+## BigQuery failed-job recovery and backfill
+
+Official sources checked for lesson 0040 on 2026-10-26.
+
+- [Manage BigQuery jobs](https://docs.cloud.google.com/bigquery/docs/managing-jobs)
+- [JOBS metadata](https://docs.cloud.google.com/bigquery/docs/information-schema-jobs)
+- [Batch load atomicity and retries](https://docs.cloud.google.com/bigquery/docs/batch-loading-data)
+- [Transactions](https://docs.cloud.google.com/bigquery/docs/transactions)
+- [Create table snapshots](https://docs.cloud.google.com/bigquery/docs/table-snapshots-create)
+- [insertAll API and row-indexed errors](https://docs.cloud.google.com/bigquery/docs/reference/rest/v2/tabledata/insertAll)
+- [REST streaming behavior](https://docs.cloud.google.com/bigquery/docs/write-api-rest)
+- [Storage Write API gRPC](https://docs.cloud.google.com/bigquery/docs/write-api-grpc)
+- [DML syntax](https://docs.cloud.google.com/bigquery/docs/reference/standard-sql/dml-syntax)
+- [DML limitations](https://docs.cloud.google.com/bigquery/docs/data-manipulation-language)
+- [Airflow 2.11 DAG runs and re-runs](https://airflow.apache.org/docs/apache-airflow/2.11.0/core-concepts/dag-run.html)

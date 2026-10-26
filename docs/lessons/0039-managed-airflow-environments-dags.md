@@ -572,4 +572,4 @@ The [reference catalog](../references/resources.md#managed-airflow-environment-a
 
 | Previous Lesson | All Lessons | Next Lesson |
 | :--- | :---: | ---: |
-| [0038: BigQuery ETL architecture](0038-bigquery-etl-architecture-load-transform-export.md) | [Lesson catalog](index.md) | None yet |
+| [0038: BigQuery ETL architecture](0038-bigquery-etl-architecture-load-transform-export.md) | [Lesson catalog](index.md) | [0040: BigQuery recovery and backfill](0040-bigquery-failed-job-recovery-backfill.md) |

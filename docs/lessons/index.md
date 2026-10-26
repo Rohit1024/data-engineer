@@ -81,3 +81,4 @@ All concepts from the roadmap are organized into structured, progressive modules
 - [x] [0037: BigQuery ingestion lab: batch, streaming, CDC, ETL and ELT](0037-bigquery-ingestion-etl-elt-lab.md)
 - [x] [0038: Designing BigQuery ETL architecture: load, transform and export](0038-bigquery-etl-architecture-load-transform-export.md)
 - [x] [0039: Managed Service for Apache Airflow: environments, DAGs and BigQuery orchestration](0039-managed-airflow-environments-dags.md)
+- [x] [0040: Recovering failed BigQuery pipelines: duplicates, missing rows and safe backfills](0040-bigquery-failed-job-recovery-backfill.md)
