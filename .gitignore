@@ -3,4 +3,5 @@ site/
 .cache/
 __pycache__/
 *.pyc
+docs/examples/beam-java/target/
 .DS_Store

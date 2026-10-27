@@ -2,132 +2,74 @@
 icon: lucide/layers
 ---
 
-# BigLake and Apache Iceberg catalogs on Google Cloud
+# BigLake, external tables and Apache Iceberg catalogs
 
-BigLake extends BigQuery's storage engine to open table formats (Parquet, ORC, Avro, Iceberg, Delta Lake) stored on Google Cloud Storage, AWS S3, and Azure Blob Storage. It decouples query compute from physical storage while enforcing fine-grained access control (row-level, column-level security) without copying data into managed BigQuery storage.
+Separate the storage format, catalog, query engine and authorization path. They solve different problems, even when a product presents them together.
 
----
+## Files are not a transactional table
 
-## BigLake internal architecture
+Parquet is a columnar file format. It supplies schemas, compression and statistics, but a directory of Parquet objects does not identify which files belong to one committed table version. Iceberg adds metadata, snapshots and commit rules. A catalog identifies the current table metadata and coordinates commits.
 
-Traditional external tables in BigQuery bypass BigQuery storage security and push raw file credentials to the query execution engine. BigLake solves this by placing a managed BigLake Storage API between Dremel compute workers and GCS.
-
-``` mermaid
+```mermaid
 flowchart TD
-    BQCompute["BigQuery Dremel Workers / Spark / Presto"] --> BigLakeAPI["BigLake Storage API"]
-    BigLakeAPI --> Policy["Dataplex / Policy Tags (Row & Column Masking)"]
-    Policy --> StorageDelegation["Storage Delegation (Service Account Credential Vending)"]
-    StorageDelegation --> GCS["Cloud Storage / S3 / ADLS (Parquet / Iceberg Files)"]
+    A["Catalog resolves table name"] --> B["Current metadata JSON"]
+    B --> C["Selected snapshot"]
+    C --> D["Manifest list"]
+    D --> E["Manifests with data and delete-file statistics"]
+    E --> F["Referenced Parquet files in object storage"]
 ```
 
-Because BigLake uses credential delegation:
-- End users need only `bigquery.tables.getData` permissions.
-- Direct GCS read access (`storage.objects.get`) is never granted to users, preventing data exfiltration.
+The reader prunes files using partition and column statistics. A writer creates new files and commits a new metadata reference. Readers of a previous snapshot keep a consistent file set. A concurrent writer may need to retry a conflicting commit. A random object delete bypasses this protocol and can break a table.
 
----
+## Pick the table type deliberately
 
-## Apache Iceberg metadata hierarchy
+| Choice | Storage and writers | Access consideration |
+| --- | --- | --- |
+| Native BigQuery table | BigQuery manages storage and mutations | Standard warehouse workload |
+| Standard external table | Engine reads your existing objects | Query identity also needs underlying object access |
+| BigLake external table | Existing objects with access delegation through a connection | Separate user table access from connection-service-account bucket access |
+| Iceberg external table | Another system owns Iceberg metadata and commits | Check supported catalog, format version and update method |
+| BigQuery-managed Iceberg table | BigQuery manages the table over your object storage | Follow its documented writer and interoperability contract |
 
-Apache Iceberg provides ACID transactions, schema evolution, hidden partitioning, and time-travel on object storage. It replaces directory-based partitioning with an immutable metadata tree:
+"Open format" does not grant arbitrary engines permission to write simultaneously. Compatible catalogs, supported operations and coordinated commits remain necessary. BigLake delegation also does not prevent exfiltration if a user independently has direct bucket access. See [BigLake access delegation](https://docs.cloud.google.com/bigquery/docs/biglake-intro) and [managed Iceberg tables](https://docs.cloud.google.com/bigquery/docs/biglake-iceberg-tables-in-bigquery).
 
-``` mermaid
-flowchart TD
-    Catalog["BigLake Metastore / Iceberg REST Catalog"] --> IcebergRoot["Table Metadata (v1.metadata.json)"]
-    IcebergRoot --> Snap["Snapshot 1 (Current)"]
-    Snap --> ManifestList["Manifest List (snap-1001.avro)"]
-    ManifestList --> Manifest1["Manifest File 1 (m-0.avro)"]
-    ManifestList --> Manifest2["Manifest File 2 (m-1.avro)"]
-    Manifest1 --> Data1["data_1.parquet (col_a: [10..50])"]
-    Manifest1 --> Data2["data_2.parquet (col_a: [51..90])"]
-    Manifest2 --> Data3["data_3.parquet (col_a: [91..120])"]
-```
+## Create an external Iceberg reference
 
-Each level prunes unnecessary reads:
-1. **Manifest list**: Records snapshots and manifest file paths with partition summary bounds.
-2. **Manifest file**: Tracks individual Parquet files with column-level minimum and maximum statistics.
-3. **Data file**: Contains actual data records.
-
----
-
-## Creating BigLake Iceberg tables in BigQuery
-
-### 1. Create a cloud resource connection
+Prerequisites: an existing Iceberg table and metadata JSON, a compatible dataset/bucket location, a cloud resource connection, and bucket-reader access for the connection's service account. Replace every example identifier.
 
 ```bash
-bq mk --connection \
-    --connection_type=CLOUD_RESOURCE \
-    --location=US \
-    --project_id=my-project-id \
-    biglake-gcs-conn
+bq mk --connection --connection_type=CLOUD_RESOURCE \
+  --location=us-central1 --project_id="$PROJECT_ID" lake-connection
+bq show --connection "${PROJECT_ID}.us-central1.lake-connection"
 ```
 
-Get the service account generated by BigQuery:
-
-```bash
-bq show --connection my-project-id.US.biglake-gcs-conn
-```
-
-Grant read access to the bucket:
-
-```bash
-gcloud storage buckets add-iam-policy-binding gs://my-lakehouse-bucket \
-    --member="serviceAccount:service-12345678@gcp-sa-bigquery-v2.iam.gserviceaccount.com" \
-    --role="roles/storage.objectViewer"
-```
-
-### 2. Define the BigLake Iceberg table in BigQuery SQL
+Copy the returned service account into the bucket's Storage Object Viewer binding. Users still need BigQuery job and table permissions plus the applicable connection-use permission.
 
 ```sql
-CREATE EXTERNAL TABLE `my_project.lakehouse_dw.customer_iceberg`
-WITH CONNECTION `us.biglake-gcs-conn`
+CREATE EXTERNAL TABLE `YOUR_PROJECT_ID.lake.orders_iceberg`
+WITH CONNECTION `YOUR_PROJECT_ID.us-central1.lake-connection`
 OPTIONS (
   format = 'ICEBERG',
-  uris = ['gs://my-lakehouse-bucket/tables/customer/metadata/v1.metadata.json']
+  uris = ['gs://YOUR_BUCKET/orders/metadata/v1.metadata.json']
 );
 ```
 
-Querying this table uses Iceberg metadata for partition pruning without reading unreferenced Parquet files.
+This statement registers metadata; it does not convert arbitrary Parquet into Iceberg. A reference to a specific metadata file can become stale when another engine commits a newer file. Use a supported catalog integration or deliberately update the reference. Confirm the current snapshot before using the table for a freshness SLO.
 
----
+The current [external Iceberg guide](https://docs.cloud.google.com/bigquery/docs/iceberg-external-tables) supports historical queries over retained Iceberg snapshots using `FOR SYSTEM_TIME AS OF`. This depends on snapshots retained in Iceberg metadata, rather than BigQuery native-table time-travel retention. Snapshot expiration or deleting referenced files removes that recovery path.
 
-## BigLake object tables for unstructured data
+## Schema evolution and maintenance example
 
-Object tables expose GCS unstructured files (images, audio, PDFs, videos) as read-only SQL tables containing metadata, file sizes, generation IDs, and signed URLs.
+Suppose an order table renames `customer_name` to `display_name`. Iceberg tracks columns by field ID, so a supported rename can preserve identity. Dropping a field and adding another with the same display name is different. Test how every consuming engine handles that evolution.
 
-```sql
-CREATE EXTERNAL TABLE `my_project.lakehouse_dw.document_vault`
-WITH CONNECTION `us.biglake-gcs-conn`
-OPTIONS (
-  object_metadata = 'SIMPLE',
-  uris = ['gs://my-lakehouse-bucket/invoices/*.pdf']
-);
-```
+After 10,000 small streaming commits, compaction can combine data files into fewer larger files. Snapshot expiration later releases unreferenced files, subject to reader and rollback requirements. Compaction changes physical organization; it must preserve business rows and use the table's commit protocol. Keep old snapshots long enough for your longest reader and required recovery window.
 
-You can run Gemini multimodal AI models or Cloud DLP functions directly over the `uri` column in SQL.
+## Exercise with expected evidence
 
----
+Using a sandbox Iceberg table, record its snapshot ID and row count. Append one new order through its owning engine, then query through BigQuery. If the new row is absent, inspect the catalog/metadata reference before blaming object-store consistency. Refresh the supported reference and verify the new row. Query a retained older snapshot and predict its count.
 
-## Hands-on exercise: Metadata inspection and time-travel query
-
-Querying historical Iceberg snapshots using SQL:
-
-```sql
--- Query snapshot from 2 hours ago
-SELECT customer_id, balance, updated_at
-FROM `my_project.lakehouse_dw.customer_iceberg`
-FOR SYSTEM_TIME AS OF TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 2 HOUR)
-WHERE balance > 10000;
-```
-
----
-
-## Summary heuristics
-
-1. Use BigLake tables over raw external tables whenever you need column-level security, row-level filtering, or metadata caching.
-2. Use Apache Iceberg when multiple compute engines (Spark, Trino, BigQuery) write to and read from the same object storage table.
-3. BigLake Object Tables allow BigQuery SQL and Vertex AI models to process unstructured data directly in GCS without manual metadata cataloging.
-
----
+??? note "Recall answers"
+    Parquet describes files; Iceberg defines committed table state; the catalog identifies current metadata. Time travel requires retained metadata and files. A connection delegates object access but does not revoke separate bucket grants.
 
 | Previous Lesson | Curriculum | Next Lesson |
 | :--- | :---: | ---: |

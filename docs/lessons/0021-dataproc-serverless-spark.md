@@ -2,88 +2,68 @@
 icon: lucide/terminal
 ---
 
-# Dataproc Serverless for Spark: Submitting interactive and batch workloads
+# Serverless Spark batches: runtime, resources and networking
 
-Dataproc Serverless runs Apache Spark workloads without requiring you to manage, configure, or tune underlying Compute Engine clusters. You submit Spark code or SQL scripts, and GCP dynamically provisions, scales, and deallocates compute capacity measured in Dataproc Compute Units (DCUs).
+Google's Managed Service for Apache Spark includes serverless execution formerly called Dataproc Serverless. The CLI and API can still use `dataproc`. Serverless removes cluster lifecycle management; it does not remove Spark resource planning, dependency compatibility or output correctness.
 
----
+## Follow a batch's lifecycle
 
-## Dataproc Serverless architecture
-
-``` mermaid
+```mermaid
 flowchart TD
-    Submit["User / Airflow: gcloud dataproc batches submit"] --> ControlPlane["Dataproc Serverless Control Plane"]
-    ControlPlane --> AutoScale["Dynamic DCU Autoscaler (Executors 2 .. 50)"]
-    AutoScale --> SparkDriver["Managed Driver Container"]
-    AutoScale --> SparkExec["Managed Executor Containers"]
-    SparkDriver <--> SparkExec
-    SparkExec <--> Storage["Cloud Storage / BigQuery Storage API / Iceberg"]
-    SparkDriver --> Cleanup["Auto-Decommission upon Batch Completion"]
+    A["Submit batch identity, code, runtime and resource options"] --> B["Service allocates driver and executors"]
+    B --> C["Driver constructs stages"]
+    C --> D["Executors read, shuffle and write"]
+    D --> E["Driver reports terminal result"]
+    E --> F["Reconcile output and inspect logs"]
+    F --> G["Compute released; stored output follows its own retention"]
 ```
 
----
+A batch runs one submitted workload. Interactive sessions have a different lifecycle and idle-resource considerations. Autoscaling changes executors within supported settings. A single hot key or an oversized driver result cannot be fixed by unlimited executor scaling.
 
-## Submitting a PySpark batch workload
+## Submit a measured workload
 
-Submit a batch job directly from the terminal without creating a cluster:
+Prerequisites: enabled Dataproc APIs, a supported runtime in your region, a subnet with required internal connectivity and Google API access, and a workload service account authorized for source/sink data. Your submitter needs permission to act as that service account. Select a supported runtime from [runtime versions](https://docs.cloud.google.com/managed-spark/docs/concepts/versions/serverless-versions); do not inherit an obsolete version silently.
+
+Upload a self-contained Spark script, such as the fixture adapted from lesson 0004, to the code bucket. Set the values below explicitly:
 
 ```bash
-gcloud dataproc batches submit pyspark gs://my-code-bucket/scripts/clean_transactions.py \
-    --project=my-gcp-project \
-    --region=us-central1 \
-    --deps-bucket=gs://my-staging-bucket \
-    --subnet=projects/my-gcp-project/regions/us-central1/subnetworks/data-subnet \
-    --version=2.1 \
-    --properties=spark.dynamicAllocation.maxExecutors=20,spark.driver.cores=4,spark.executor.memory=16g
+export SPARK_RUNTIME="REPLACE_WITH_SUPPORTED_TESTED_RUNTIME"
+export SPARK_BATCH_ID="orders-lab-001"
+gcloud dataproc batches submit pyspark gs://YOUR_BUCKET/jobs/orders.py \
+  --project="$PROJECT_ID" --region=us-central1 \
+  --batch="$SPARK_BATCH_ID" --version="$SPARK_RUNTIME" \
+  --service-account="spark-lab@${PROJECT_ID}.iam.gserviceaccount.com" \
+  --subnet="projects/${PROJECT_ID}/regions/us-central1/subnetworks/data-subnet" \
+  --properties=spark.dynamicAllocation.maxExecutors=10
+gcloud dataproc batches describe "$SPARK_BATCH_ID" --region=us-central1
 ```
 
----
+Record the batch ID before submission. After a transport timeout, retrieve that identity rather than blindly launching an append workload again. A definitively failed batch needs a deliberate new attempt and safe output semantics. Check terminal state and destination contents. See [batch submission](https://docs.cloud.google.com/managed-spark/docs/quickstarts/spark-batch).
 
-## Custom container images for Python dependencies
+## Size driver, executors and network together
 
-When pipelines depend on third-party C extensions or specialized Python libraries (e.g. `scikit-learn`, `geopandas`), build a custom container image using the Dataproc Serverless base image:
+Resource properties have supported CPU/memory ratios and runtime-specific limits. Set allocation properties at submission time; changing them after `SparkSession` starts cannot recreate the container. Network planning must account for driver/executor addresses, subnet capacity, DNS, firewall rules, Google APIs and dependency artifacts. A private subnet without the required API path can fail before your first transformation.
 
-```dockerfile
-FROM gcr.io/dataproc-serverless/spark:latest
+For 1 TiB of shuffle data and a starting target of 128 MiB per partition, estimate roughly 8,192 partitions. This is a starting measurement hypothesis, not a required Spark setting: skew, compression, AQE and task duration change the right count. Watch spill, executor memory, task distribution and total cost. See [Spark properties](https://docs.cloud.google.com/managed-spark/docs/concepts/spark-properties-serverless).
 
-USER root
-RUN apt-get update && apt-get install -y libspatialindex-dev && rm -rf /var/lib/apt/lists/*
+## Package dependencies using the supported contract
 
-COPY requirements.txt /tmp/requirements.txt
-RUN pip install --no-cache-dir -r /tmp/requirements.txt
+A custom container supplies compatible user libraries. The service supplies runtime components according to its documented contract. Do not invent a `gcr.io/dataproc-serverless/spark:latest` base image or bundle incompatible Spark/Java versions into an image. Follow the [custom-container guide](https://docs.cloud.google.com/managed-spark/docs/guides/custom-containers), including required utilities, user identity, Python environment and runtime compatibility. Pin image digests and dependencies after validating them.
 
-USER spark
-```
+Choose managed clusters when you need supported cluster-level customization or several coordinated frameworks. Choose serverless batches when independent Spark workloads fit its runtime/network constraints. Compare measured startup, complete runtime, idle cost and operating effort; fixed claims that serverless always starts in 10–30 seconds are not a planning guarantee.
 
-Submit batches referencing the custom container:
+## Recall and failure exercise
 
-```bash
-gcloud dataproc batches submit pyspark gs://my-code-bucket/scripts/geo_aggregation.py \
-    --region=us-central1 \
-    --container-image=us-central1-docker.pkg.dev/my-gcp-project/containers/spark-geo:v1
-```
+1. Why can a batch fail before creating executors?
+2. Why can a successful batch still duplicate an output table?
+3. What should you inspect before increasing executor memory?
 
----
+??? note "Answers"
+    1. IAM, artifact access, runtime availability, subnet/network or quota can block provisioning.
+    2. Another attempt can append the same data under a new batch identity.
+    3. Identify driver versus executor failure, heap versus overhead pressure, spill and skew. Follow supported allocation ratios instead of changing unrelated memory settings.
 
-## Comparison: Managed clusters vs Dataproc Serverless
-
-| Dimension | Dataproc Managed Clusters | Dataproc Serverless |
-| :--- | :--- | :--- |
-| **Cluster provisioning time** | 90 to 180 seconds | 10 to 30 seconds |
-| **Infrastructure management** | Machine types, disk sizes, autoscaling policies | None (fully managed DCUs) |
-| **Billing metric** | Compute Engine VM vCPU/RAM + Dataproc premium | DCU-hours ($0.06 per DCU-hour) |
-| **Custom open source tooling** | Full root SSH access to VMs, custom daemons (Presto, Flink) | Standard Spark runtime container only |
-| **Best fit** | Long-running multi-framework clusters with custom networking | Independent batch ETL workloads and scheduled Airflow tasks |
-
----
-
-## Summary heuristics
-
-1. Choose **Dataproc Serverless** for scheduled Spark batch workloads to eliminate cluster startup overhead and infrastructure tuning.
-2. Ensure the VPC subnet has **Private Google Access** enabled and adequate IP address space for dynamically allocated executor containers.
-3. Build custom container images instead of passing large zip packages when Python dependencies exceed a few lightweight packages.
-
----
+Run a sandbox batch twice against a staged output, prove its publication is repeatable, and delete only the dedicated artifacts after preserving logs and measurements.
 
 | Previous Lesson | Curriculum | Next Lesson |
 | :--- | :---: | ---: |

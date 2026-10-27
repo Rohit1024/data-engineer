@@ -2,144 +2,83 @@
 icon: lucide/arrow-left-right
 ---
 
-# BigQuery Data Transfer Service and GCS notifications
+# BigQuery transfers and event-driven Cloud Storage loads
 
-Automating scheduled and event-driven data ingestion into BigQuery can be achieved without managing custom servers. BigQuery Data Transfer Service (DTS) provides managed scheduled transfers from SaaS platforms, cloud object stores, and data warehouses, while Cloud Storage Object Change Notifications enable event-driven, real-time file ingestion.
+File arrival, job submission and successful publication are separate events. Choose a managed recurring transfer or a custom event loader based on its contract and recovery needs.
 
----
+## Scheduled discovery versus object events
 
-## BigQuery Data Transfer Service (DTS) architecture
-
-DTS runs serverless managed batch import jobs into target BigQuery datasets on a recurring schedule or on-demand.
-
-``` mermaid
+```mermaid
 flowchart TD
-    subgraph Sources["Supported DTS Sources"]
-        S3["AWS S3 / Azure Blob"]
-        SaaS["Google Ads / Salesforce / YouTube"]
-        DW["Teradata / Amazon Redshift"]
-        GCS["Cloud Storage Batch Files"]
-    end
-
-    Sources --> DTSEngine["BigQuery Data Transfer Service"]
-    DTSEngine --> Stage["Staging Decryption & Validation"]
-    Stage --> BQTarget["BigQuery Destination Dataset"]
+    A["Immutable files in Cloud Storage"] --> B["Scheduled DTS discovery"]
+    A --> C["Object finalize notification"]
+    B --> D["Managed transfer load jobs"]
+    C --> E["Loader records object generation and job identity"]
+    E --> F["BigQuery jobs.insert or client load method"]
+    D --> G["Validate loaded data before publication"]
+    F --> G
 ```
 
----
+DTS is useful when a supported connector's scheduling and ingestion behavior fit. A custom loader gives control over manifests, event identity and routing, but you own retries and completion monitoring. Neither path guarantees a fixed seconds-to-query latency.
 
-## Configuring a scheduled transfer from Cloud Storage
+## Use the connector's actual parameter names
 
-Use the `bq` CLI to configure a daily transfer that loads partition-formatted Parquet files:
+Create a same-location destination dataset and table first. Replace bucket/project names. With an existing Parquet schema/table:
 
 ```bash
-bq mk --transfer_config \
-    --project_id=my-gcp-project \
-    --data_source=google_cloud_storage \
-    --display_name="Daily Customer Orders Ingest" \
-    --target_dataset=raw_staging \
-    --params='{
-      "data_path_template":"gs://my-inbound-bucket/orders/{run_time|%Y/%m/%d}/*.parquet",
-      "destination_table_name_template":"customer_orders",
-      "file_data_type":"PARQUET",
-      "write_disposition":"APPEND"
-    }' \
-    --schedule="every 24 hours"
+bq --location=us-central1 mk --transfer_config \
+  --project_id="$PROJECT_ID" --data_source=google_cloud_storage \
+  --display_name="orders-files" --target_dataset=raw \
+  --params='{"data_path_template":"gs://YOUR_BUCKET/orders/*.parquet","destination_table_name_template":"orders","file_format":"PARQUET","write_disposition":"APPEND"}'
 ```
 
-DTS replaces `{run_time|%Y/%m/%d}` with the execution timestamp, guaranteeing that each scheduled run loads only the files intended for that time window.
+The Cloud Storage connector uses `file_format`; `file_data_type` is not the documented parameter. `APPEND` and `MIRROR` describe connector write behavior. They are distinct from API `WRITE_APPEND` and `WRITE_TRUNCATE` enums. Review the resulting schedule and run manually in the console. See [transfer setup](https://docs.cloud.google.com/bigquery/docs/cloud-storage-transfer).
 
----
+Append transfers track source file state according to connector behavior; they do not enforce unique business keys. Rewriting an object or running a backfill can revisit data. Mirror mode replaces destination contents with the selected source files; it does not merge rows by order ID. A runtime path template selects files; it does not prove the producer finished delivering every expected file. See [ingestion behavior](https://docs.cloud.google.com/bigquery/docs/cloud-storage-transfer-overview).
 
-## Event-driven ingestion with GCS notifications and Eventarc
+## Identify a custom load before submitting it
 
-Scheduled batch runs introduce latency. For immediate loading when a file lands in GCS, wire GCS bucket notifications to Pub/Sub or Eventarc, triggering a Cloud Function or Cloud Run service.
-
-``` mermaid
-flowchart TD
-    GCSBucket["GCS Landing Bucket (File Upload)"] --> Notification["GCS Pub/Sub Notification (OBJECT_FINALIZE)"]
-    Notification --> Topic["gcs-file-events Topic"]
-    Topic --> Function["Cloud Function / Cloud Run Loader"]
-    Function --> BQLoad["BigQuery Load Job (api.tables.insert / bq load)"]
-    BQLoad --> BQTable["Target Table"]
-```
-
-### Setting up Pub/Sub notifications on a bucket
-
-```bash
-# 1. Create event topic
-gcloud pubsub topics create gcs-file-events
-
-# 2. Add notification configuration to bucket
-gcloud storage buckets notifications create gs://my-inbound-bucket \
-    --topic=gcs-file-events \
-    --event-types=OBJECT_FINALIZE \
-    --object-name-prefix="incoming/orders/"
-```
-
----
-
-## Event handler in Python (Cloud Function v2)
-
-This function receives the GCS finalize event and triggers a serverless BigQuery load job:
+The following runnable helper needs `google-cloud-bigquery`, ADC, an existing table and a local caller supplying the recorded generation. It assumes the object name is immutable for the entire job/retry period. The hash identifies intended work but does not force BigQuery to read historical bytes from a mutable name.
 
 ```python
+import hashlib
+from google.api_core.exceptions import Conflict
 from google.cloud import bigquery
-import functions_framework
-import json
-import base64
 
-bq_client = bigquery.Client()
-
-@functions_framework.cloud_event
-def process_gcs_event(cloud_event):
-    pubsub_message = base64.b64decode(cloud_event.data["message"]["data"]).decode("utf-8")
-    payload = json.loads(pubsub_message)
-
-    bucket_name = payload["bucket"]
-    object_name = payload["name"]
-    source_uri = f"gs://{bucket_name}/{object_name}"
-
-    if not object_name.endswith(".parquet"):
-        print(f"Skipping non-parquet file: {object_name}")
-        return
-
-    table_id = "my-gcp-project.raw_staging.customer_orders"
-    job_config = bigquery.LoadJobConfig(
+def load_parquet(bucket, name, generation, table, location="us-central1"):
+    identity = f"{bucket}/{name}#{generation}|{table}|parquet-v1"
+    job_id = "load_" + hashlib.sha256(identity.encode()).hexdigest()
+    client = bigquery.Client()
+    config = bigquery.LoadJobConfig(
         source_format=bigquery.SourceFormat.PARQUET,
-        write_disposition=bigquery.WriteDisposition.WRITE_APPEND
+        write_disposition=bigquery.WriteDisposition.WRITE_APPEND,
+        max_bad_records=0,
     )
-
-    load_job = bq_client.load_table_from_uri(
-        source_uri,
-        table_id,
-        job_config=job_config
-    )
-    print(f"Started BigQuery load job {load_job.job_id} for {source_uri}")
+    try:
+        job = client.load_table_from_uri(
+            f"gs://{bucket}/{name}", table, job_id=job_id,
+            location=location, job_config=config,
+        )
+    except Conflict:
+        job = client.get_job(job_id, location=location)
+    job.result()  # (1)!
+    return job.job_id
 ```
 
-BigQuery batch load jobs are **free** on shared slots; you do not consume reservation slots or pay on-demand analysis fees for loading Parquet, CSV, or Avro files from GCS.
+1. Wait for completion and surface failure before recording success. Submission alone does not mean data is loaded.
 
----
+After a transport timeout, retrieve the same project/location/job ID. If the job definitively failed, record a new deliberate attempt ID after fixing its cause. Keep a durable manifest/ledger because job IDs are not a permanent business deduplication store. A short-lived event handler may need to hand monitoring to a durable orchestrator rather than block until completion.
 
-## Trade-offs: DTS vs Event-driven loading
+Cloud Storage Pub/Sub notifications and direct Eventarc Storage events have different envelopes. Decode the specific configured event type. Standard load jobs use the jobs API, not `tables.insert`. Event notifications can repeat; return success only after durable handoff or completed processing under your acknowledgement contract. See [notifications](https://docs.cloud.google.com/storage/docs/pubsub-notifications) and [batch loads](https://docs.cloud.google.com/bigquery/docs/batch-loading-data).
 
-| Factor | BigQuery DTS | Event-Driven (GCS + Eventarc + Functions) |
-| :--- | :--- | :--- |
-| **Ingestion latency** | Scheduled (minimum 15 minutes) | Near real-time (seconds) |
-| **Infrastructure overhead** | Zero (fully managed configuration) | Minimal (Cloud Function / Cloud Run maintenance) |
-| **Transformations** | None (direct load) | Lightweight preprocessing possible before loading |
-| **Custom deduplication** | Manual downstream SQL | Built-in logic inside event handler |
+## Exercise with expected outcomes
 
----
+Use the helper twice with the same immutable object and generation. Both calls should identify the same successful job, with one append. Use a new job identity for the same bytes and predict a second append. Then ask what happens if the filename is replaced before the first job reads it.
 
-## Summary heuristics
+??? note "Answers"
+    Job identity protects retry of one job. It does not make a mutable URI immutable or prevent an intentionally different job from loading the same business events. Preserve unique source names, retained generations and a processed-input ledger.
 
-1. Use BigQuery DTS when loading scheduled extracts from standard external platforms (AWS S3, Google Ads, Salesforce, Redshift).
-2. Use GCS notifications with Eventarc and Cloud Functions when latency must be under 30 seconds for incoming files.
-3. BigQuery batch load jobs (`load_table_from_uri`) are free of compute charges, making batch loads more cost-effective than continuous streaming writes when micro-second latency is not required.
-
----
+Batch loads through the shared pool generally have no load-compute charge, but storage, transfer, custom loading capacity and connector costs can still apply. Batch processing also has load quotas. Group small files into bounded batches instead of submitting one job per tiny event file. [Lesson 0037](0037-bigquery-ingestion-etl-elt-lab.md) provides a full lab and cleanup.
 
 | Previous Lesson | Curriculum | Next Lesson |
 | :--- | :---: | ---: |

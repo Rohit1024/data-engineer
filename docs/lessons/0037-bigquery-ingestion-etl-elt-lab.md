@@ -622,6 +622,12 @@ Run these only in the dedicated lab project. Remove the worker's project IAM bin
 
 The [reference catalog](../references/resources.md#bigquery-ingestion-and-transformation-lab) records the official sources for this capstone. For deeper implementation detail, revisit [CDC](0007-change-data-capture-datastream-bigquery.md), [DTS](0008-bigquery-data-transfer-service-gcs-notifications.md), [Storage Write API](0011-bigquery-storage-write-api.md), [Dataflow templates](0019-dataflow-flex-templates-cloud-build.md) and [SQLX assertions](0025-writing-dataform-sqlx-assertions.md).
 
+## Extend the lab with a compatible schema change
+
+Add an optional `coupon_code` to one producer event and predict the effect on each ingestion path before changing any table. Check the topic validation, BigQuery subscription unknown-field policy, UDF output projection, load schema and downstream SQL independently. A producer publish succeeding does not mean each sink accepts the addition. Use [lesson 0042](0042-data-contracts-schema-evolution.md) to define the rollout order and preserve the original schema version for replay.
+
+Then add `currency` and decide whether existing cents are guaranteed to be USD. A default is valid only if the old contract establishes that meaning. Reconcile accepted plus rejected event identities at the same source boundary after the change. A total row count alone can hide one missing event and one duplicate.
+
 | Previous Lesson | All Lessons | Next Lesson |
 | :--- | :---: | ---: |
 | [0036: BigQuery FinOps](0036-bigquery-finops-slot-reservations.md) | [Lesson catalog](index.md) | [0038: ETL architecture and load–transform–export](0038-bigquery-etl-architecture-load-transform-export.md) |

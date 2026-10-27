@@ -375,6 +375,12 @@ For the next practice session, replace the manual command sequence with a workfl
 - [Introduction to loading, transforming and exporting data](https://docs.cloud.google.com/bigquery/docs/load-transform-export-intro)
 - [Official reference catalog](../references/resources.md#bigquery-architecture-and-load-transform-export)
 
+## Extend the summary into a dimensional mart
+
+The published summary has one row per customer. If a consumer joins it to several customer-history versions or order lines, it can multiply the already aggregated amount. Before adding a dimension, define whether the result uses current customer attributes or attributes at each order's purchase time. For historical attributes, join the underlying facts to one applicable dimension interval before aggregation, as in [lesson 0041](0041-googlesql-data-modeling.md).
+
+As an exercise, add two dimension versions for c1 and demonstrate the wrong total from an unrestricted customer-ID join. Correct the grain/as-of relationship, then re-export and prove the control total remains 70.00. The export manifest should describe this metric definition and revision as well as its file list.
+
 | Previous Lesson | All Lessons | Next Lesson |
 | :--- | :---: | ---: |
 | [0037: BigQuery ingestion lab](0037-bigquery-ingestion-etl-elt-lab.md) | [Lesson catalog](index.md) | [0039: Managed Airflow and DAG examples](0039-managed-airflow-environments-dags.md) |

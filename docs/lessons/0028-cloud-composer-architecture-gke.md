@@ -2,113 +2,73 @@
 icon: lucide/network
 ---
 
-# Cloud Composer architecture and GKE environments
+# Managed Airflow architecture and environment boundaries
 
-Google Cloud Composer 2 is a managed workflow orchestration service built on Apache Airflow 2.x and Google Kubernetes Engine (GKE) Autopilot. It coordinates cross-service data pipelines across BigQuery, Dataflow, Dataproc, and external systems.
+Google's Managed Service for Apache Airflow was formerly Cloud Composer. Resource APIs and the CLI retain `composer`. Distinguish the managed generation from the Airflow version and Google provider version: those determine different compatibility and operational rules.
 
----
+## Trace one task through the components
 
-## Composer 2 internal architecture
-
-Composer 2 separates the Airflow control plane from customer compute resources using GKE Autopilot:
-
-``` mermaid
+```mermaid
 flowchart TD
-    subgraph StorageLayer["GCS Bucket (Environment Storage)"]
-        DAGs["gs://composer-bucket/dags/"]
-        Plugins["gs://composer-bucket/plugins/"]
-        Data["gs://composer-bucket/data/"]
-    end
-
-    subgraph ComposerGKE["GKE Autopilot Environment"]
-        Webserver["Airflow Webserver (UI)"]
-        Scheduler["Airflow Scheduler (1 to N replicas)"]
-        Triggerer["Airflow Triggerer (Async event loop)"]
-        Workers["Celery Workers (Autoscaling Pods)"]
-        RedisQueue["Redis Broker"]
-    end
-
-    subgraph ManagedGCP["Managed Google Infrastructure"]
-        MetadataDB["Cloud SQL (PostgreSQL Metadata DB)"]
-    end
-
-    StorageLayer <-->|"gcsfuse Sync"| ComposerGKE
-    Scheduler <--> RedisQueue
-    RedisQueue --> Workers
-    Scheduler <--> MetadataDB
-    Workers <--> MetadataDB
-    Triggerer <--> MetadataDB
+    A["Versioned DAG files in environment bucket"] --> B["DAG processors parse Python"]
+    B --> C["Scheduler evaluates runs, dependencies and limits"]
+    C --> D["Worker executes a task instance"]
+    D --> E["External service runs the data job"]
+    D --> F["Triggerer monitors deferred waiting"]
+    F --> C
+    C --> G["Metadata database stores run and task state"]
+    G --> H["Airflow UI, logs and operational evidence"]
 ```
 
-1. **Storage synchronization**: The environment's Cloud Storage bucket syncs DAG files to Airflow pods using `gcsfuse`. Modifying a DAG file in GCS updates all scheduler and worker pods within 30 to 60 seconds.
-2. **Dynamic worker autoscaling**: Celery workers scale up automatically based on queue backlog and CPU/memory pressure, scaling down to minimum configured workers when queues are empty.
-3. **Airflow Triggerer**: Runs an asynchronous Python `asyncio` loop to monitor sensors and deferrable tasks without blocking Celery worker slots.
+The worker executes the operator's Python; BigQuery or Spark performs the large data operation. A scheduler decides eligibility, not business correctness. A triggerer can monitor asynchronous waits without occupying an ordinary worker slot. Metadata stores small orchestration state and XComs, not your analytical dataset.
 
----
+Older Composer 2 architecture and today's Gen 3 environment have different tenant/customer-project boundaries and networking/configuration procedures. Do not assume every environment exposes the same GKE cluster or sync implementation. Follow the selected generation's [architecture](https://docs.cloud.google.com/composer/docs/composer-3/environment-architecture).
 
-## Private IP environments and security
+## Match environment, DAG API and provider
 
-In enterprise environments, Cloud Composer must be provisioned with **Private IP**:
-- Airflow UI and GKE nodes have no public IP addresses.
-- Access routes through internal VPC Peering and Cloud NAT.
-- Direct connectivity to on-prem databases via Cloud VPN or Interconnect.
-
----
-
-## Provisioning a Composer 2 environment with gcloud
+List available images in the actual region:
 
 ```bash
-gcloud composer environments create prod-orchestrator-01 \
-    --location=us-central1 \
-    --image-version=composer-2.8.5-airflow-2.7.3 \
-    --environment-size=medium \
-    --service-account="composer-sa@my-gcp-project.iam.gserviceaccount.com" \
-    --scheduler-count=2 \
-    --scheduler-cpu=2 \
-    --scheduler-memory=4GB \
-    --triggerer-count=2 \
-    --triggerer-cpu=1 \
-    --triggerer-memory=2GB \
-    --min-workers=2 \
-    --max-workers=10 \
-    --worker-cpu=2 \
-    --worker-memory=8GB
+gcloud composer image-versions list --location=us-central1
 ```
 
----
+Select a supported Gen 3 image compatible with your DAG code and record its Airflow/Python/provider versions. The lab in [0039](0039-managed-airflow-environments-dags.md) targets Airflow 2.11 and includes complete environment creation, identities, fixtures and cleanup. Do not deploy an old `composer-2.8.5-airflow-2.7.3` image merely because an earlier example named it. Airflow 3 introduces API/import and runtime differences that require migration testing.
 
-## Managing Python packages and DAG deployment
-
-### 1. Installing custom PyPI dependencies
+For an already-created disposable environment, deploy one file using its actual DAG prefix:
 
 ```bash
-gcloud composer environments update prod-orchestrator-01 \
-    --location=us-central1 \
-    --update-pypi-packages-from-file=requirements.txt
+export ENV_NAME=YOUR_LAB_ENVIRONMENT
+export DAG_PREFIX="$(gcloud composer environments describe "$ENV_NAME" \
+  --location=us-central1 --format='value(config.dagGcsPrefix)')"
+gcloud storage cp dags/row_taskflow.py "${DAG_PREFIX}/"
 ```
 
-### 2. Deploying DAGs to the environment bucket
+Use the downloadable file in lesson 0039. Upload success precedes synchronization and parsing. Verify the expected DAG ID and import errors in Airflow before triggering it. Avoid an unreviewed sync deletion flag against a shared environment bucket. See [DAG management](https://docs.cloud.google.com/composer/docs/composer-3/manage-dags).
 
-Retrieve the environment's DAG bucket location:
+## Security and capacity are design choices
 
-```bash
-DAG_BUCKET=$(gcloud composer environments describe prod-orchestrator-01 \
-    --location=us-central1 \
-    --format="value(config.nodeConfig.dagGcsPrefix)")
+A DAG author can execute Python with the environment's workload identity. Write access to its bucket is therefore a powerful permission. Separate environments or identities when workloads need different trust boundaries. Use ADC, supported connections and a secrets backend instead of embedding service-account keys.
 
-# Sync local DAGs folder to Composer GCS bucket
-gcloud storage rsync ./dags ${DAG_BUCKET} --delete-unmatched-destination-objects
-```
+Private connectivity needs an actual route/DNS/firewall design to sources, Google APIs and dependency artifacts. "Private IP" alone does not prove that the Airflow web interface is restricted as intended or that packages can be installed. Check the generation-specific network and web-access configuration.
 
----
+Two schedulers can improve availability where supported, but arbitrary fixed scheduler/triggerer counts are not a universal guarantee. Measure parsing time, heartbeat health, task queue delay, worker saturation, deferred tasks and metadata-database pressure. Set pools and concurrency from downstream capacity. More workers cannot fix an invalid source path or missing table permission.
 
-## Summary heuristics
+## Worked capacity example
 
-1. Always provision at least 2 schedulers and 2 triggerers for production high availability.
-2. Avoid heavy data processing inside Airflow worker processes; workers should only trigger and monitor external compute engines (BigQuery, Dataflow, Dataproc).
-3. Use CI/CD to run `gcloud storage rsync` to deploy DAG files into the environment bucket.
+One hundred tasks each wait 30 minutes for BigQuery. Blocking operators can occupy 100 worker slots while mostly idle. Deferrable operators can release those worker slots during the wait but still need triggerer capacity, startup/completion workers and BigQuery capacity. Deferral changes orchestration resource use; it does not speed the SQL.
 
----
+## Recall and recovery exercise
+
+1. Why can a healthy environment publish stale data?
+2. Does uploading a Python file prove its provider imports work?
+3. Which identity needs destination write access?
+
+??? note "Answers"
+    1. Correct scheduling does not prove input completeness, query logic or publication success.
+    2. No. Parse in a matching environment and run the relevant external-service fixture.
+    3. The task's effective runtime/impersonated identity, not merely the human who uploaded the file.
+
+Deploy the tiny DAG from lesson 0039, introduce an import error and find it, then restore it. Separately break a sandbox dataset permission and distinguish runtime failure from parsing failure. Preserve external job IDs when diagnosing a worker loss.
 
 | Previous Lesson | Curriculum | Next Lesson |
 | :--- | :---: | ---: |

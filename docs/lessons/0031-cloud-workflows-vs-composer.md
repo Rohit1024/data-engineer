@@ -2,127 +2,97 @@
 icon: lucide/git-compare
 ---
 
-# Google Cloud Workflows vs Cloud Composer: When to use serverless orchestration
+# Workflows versus managed Airflow: choose the orchestration contract
 
-Google Cloud offers two primary workflow orchestration tools: Cloud Composer (managed Apache Airflow) and Google Cloud Workflows (a serverless, low-latency JSON/YAML state machine). Sizing complexity and latency requirements determines which engine to deploy.
+Compare data intervals, execution frequency, dependencies and operational needs before choosing an orchestrator. Neither service is the distributed engine that scans a warehouse table.
 
----
+## Different units of coordination
 
-## Architectural and runtime comparison
+| Requirement | Workflows | Managed Airflow |
+| --- | --- | --- |
+| Model | YAML/JSON steps, branches, API calls and state | Python DAGs, task instances and scheduling |
+| Strong fit | Service/API coordination and event-driven executions | Data intervals, historical runs, multi-team dependencies and provider ecosystem |
+| Resource lifecycle | Managed executions with step-based billing rules | Provisioned managed environment plus external jobs |
+| Waiting | Connector polling/callbacks under documented limits | Blocking, reschedule or supported deferrable operators |
+| Recovery | Execution state plus external idempotency contract | DAG/task state plus external idempotency contract |
 
-``` mermaid
+An event-driven workflow still needs input completeness and deduplication. An hourly Airflow schedule still needs to wait for real upstream completion. Do not choose either service from a fixed startup-latency claim or an outdated monthly minimum price.
+
+```mermaid
 flowchart TD
-    subgraph CloudWorkflows["Cloud Workflows (Serverless State Machine)"]
-        WStep1["Eventarc Trigger / HTTP Call"] --> WStep2["Direct GCP API Call (BigQuery Job)"]
-        WStep2 --> WStep3["Cloud Function Invocation"]
-        WStep3 --> WDone["Complete in Milliseconds (Billed per Step)"]
-    end
-
-    subgraph CloudComposer["Cloud Composer (Airflow 2.x on GKE)"]
-        CSched["Airflow Scheduler Loop"] --> CQueue["Celery Redis Queue"]
-        CQueue --> CWorker["GKE Worker Pod"]
-        CWorker --> CExec["Operator Execution & Deferral"]
-    end
-
-    CloudWorkflows ~~~ CloudComposer
+    A["Event or schedule identifies a fixed business boundary"] --> B["Orchestrator authorizes and submits work"]
+    B --> C["BigQuery, Dataflow or Spark performs data processing"]
+    C --> D["Orchestrator verifies terminal outcome"]
+    D --> E["Quality checks and publication"]
+    E --> F["Record evidence and expose result"]
 ```
 
----
+## Run a small Workflows example
 
-## Feature and cost comparison matrix
-
-| Dimension | Google Cloud Workflows | Cloud Composer (Airflow) |
-| :--- | :--- | :--- |
-| **Infrastructure** | Fully serverless (zero provisioning) | Managed GKE Autopilot cluster + Cloud SQL |
-| **Base cost** | $0/month (5,000 internal steps free/mo) | ~$350 to $700+/month base cluster cost |
-| **Startup / Step latency** | Sub-100ms | 10 to 60 seconds (scheduler polling) |
-| **Execution model** | Declarative YAML/JSON state machine | Python code DAGs |
-| **Cross-cloud connectors** | HTTP REST endpoints | Hundreds of pre-built community providers |
-| **Data pipeline UI** | GCP Console execution visualizer | Airflow Web UI (Grid view, Gantt, Graph) |
-| **Best use case** | Event-driven microservices, instant alerting | Complex enterprise ELT pipelines with dependencies |
-
----
-
-## Complete Cloud Workflows YAML definition
-
-Save as `workflows/trigger_bq_and_alert.yaml`:
+This workflow performs a parameterized read query. It intentionally makes no table mutation. Save as `verify_day.yaml`. The deployment identity needs workflow-management permissions; the runtime service account needs BigQuery Job User and relevant read access for real source tables.
 
 ```yaml
 main:
-  params: [args]
+  params: [input]
   steps:
-    - init:
-        assign:
-          - projectId: ${sys.get_env("GOOGLE_CLOUD_PROJECT_NUMBER")}
-          - datasetId: "analytics_mart"
-          - queryText: "CALL `analytics_mart.sp_refresh_daily_summary`();"
-
-    - runBigQueryJob:
+    - query:
         call: googleapis.bigquery.v2.jobs.insert
         args:
-          projectId: ${projectId}
+          projectId: ${sys.get_env("GOOGLE_CLOUD_PROJECT_ID")}
           body:
+            jobReference:
+              projectId: ${sys.get_env("GOOGLE_CLOUD_PROJECT_ID")}
+              jobId: ${"wf_" + sys.get_env("GOOGLE_CLOUD_WORKFLOW_EXECUTION_ID")}
+              location: us-central1
             configuration:
               query:
-                query: ${queryText}
+                query: "SELECT @business_date AS business_date, 1 AS verified"
                 useLegacySql: false
-        result: bqJob
-
-    - waitForQuery:
-        call: googleapis.bigquery.v2.jobs.getQueryResults
-        args:
-          projectId: ${projectId}
-          jobId: ${bqJob.jobReference.jobId}
-        result: queryResult
-
-    - checkStatus:
-        switch:
-          - condition: ${queryResult.jobComplete == true}
-            next: sendSlackNotification
-        next: waitBeforeRetry
-
-    - waitBeforeRetry:
-        call: sys.sleep
-        args:
-          seconds: 5
-        next: waitForQuery
-
-    - sendSlackNotification:
-        call: http.post
-        args:
-          url: "https://hooks.slack.com/services/T00/B00/XXXXX"
-          body:
-            text: "Daily BigQuery stored procedure executed successfully."
-        result: slackResponse
-
-    - finish:
+                parameterMode: NAMED
+                queryParameters:
+                  - name: business_date
+                    parameterType:
+                      type: DATE
+                    parameterValue:
+                      value: ${input.business_date}
+        connector_params:
+          timeout: 600
+        result: job
+    - done:
         return:
-          status: "SUCCESS"
-          jobId: ${bqJob.jobReference.jobId}
+          job_id: ${job.jobReference.jobId}
+          state: ${job.status.state}
 ```
-
-Deploy and execute with `gcloud`:
 
 ```bash
-# Deploy workflow
-gcloud workflows deploy daily-bq-summary-workflow \
-    --source=workflows/trigger_bq_and_alert.yaml \
-    --location=us-central1
-
-# Execute workflow manually
-gcloud workflows run daily-bq-summary-workflow \
-    --location=us-central1
+gcloud workflows deploy verify-day --location=us-central1 \
+  --source=verify_day.yaml \
+  --service-account="workflow-lab@${PROJECT_ID}.iam.gserviceaccount.com"
+gcloud workflows run verify-day --location=us-central1 \
+  --data='{"business_date":"2026-10-28"}'
 ```
 
----
+The BigQuery connector's `jobs.insert` waits for completion under its documented polling behavior unless configured otherwise. Do not add an unnecessary custom polling loop and then assume an incomplete query is success. Expect a successful terminal job and inspect its one-row query result. The [connector reference](https://docs.cloud.google.com/workflows/docs/reference/googleapis/bigquery/v2/jobs/insert) documents timeout and errors.
 
-## Decision heuristics
+## Retries need operation-specific rules
 
-1. Choose **Cloud Workflows** for event-driven pipelines triggered by GCS uploads or Pub/Sub events where immediate execution (sub-second) is required, or when total pipeline volume does not justify the $350+/month cost of a Composer cluster.
-2. Choose **Cloud Composer** for scheduled, multi-team data platforms with complex DAG dependencies, cross-cloud data movement (AWS S3, Snowflake, Salesforce), or custom Python logic.
+Retrying a GET after a transient response is different from retrying a mutation with an unknown outcome. A `jobs.insert` timeout can leave an accepted job running. For writes, persist a stable job identity, resolve existing state and publish repeatably. A workflow restart can repeat earlier external operations even if the first execution stopped later. Backoff reduces load; it does not deduplicate output.
 
----
+For a nightly pipeline with many dependent tables, historical reruns and Airflow providers, managed Airflow can be a better fit. For a short sequence of authenticated API operations triggered by an event, Workflows can avoid a standing Airflow environment. A hybrid can be appropriate if the ownership, identity and recovery boundary between them is explicit. Avoid making one orchestrator's successful request submission the other's successful data publication signal.
+
+## Recall and exercise
+
+1. Does a 24-hour recurring timer prove upstream data is ready?
+2. Does the connector waiting until DONE imply every custom SQL check passed?
+3. What changes if this example becomes an append query?
+
+??? note "Answers"
+    1. No. Use a completion signal/manifest for the intended boundary.
+    2. Inspect operation success and explicit validation; DONE alone can include failure in general job inspection.
+    3. Define input identity, job resolution and repeatable output before enabling retries.
+
+Delete `verify-day` after the lab. See [Workflows error handling](https://docs.cloud.google.com/workflows/docs/reference/syntax/catching-errors) and [managed Airflow lab](0039-managed-airflow-environments-dags.md).
 
 | Previous Lesson | Curriculum | Next Lesson |
 | :--- | :---: | ---: |
-| [0030: Dynamic Task Mapping & XComs](0030-dynamic-task-mapping-airflow-best-practices.md) | [All Lessons (Index)](index.md) | [0032: Dataplex Architecture](0032-dataplex-architecture-data-quality.md) |
+| [0030: Dynamic Task Mapping & XComs](0030-dynamic-task-mapping-airflow-best-practices.md) | [All Lessons (Index)](index.md) | [0032: Governance and data quality](0032-dataplex-architecture-data-quality.md) |

@@ -539,6 +539,12 @@ bq rm -r -f -d "${PROJECT_ID}:recovery_lab"
 
 The [official reference catalog](../references/resources.md#bigquery-failed-job-recovery-and-backfill) records the sources. Related lessons cover [ingestion methods](0037-bigquery-ingestion-etl-elt-lab.md), [load-transform-export](0038-bigquery-etl-architecture-load-transform-export.md), and [managed Airflow](0039-managed-airflow-environments-dags.md).
 
+## Measure the recovery objective
+
+Time the incident drill from detection through downstream reconciliation and service resumption, separating investigation, staging, repair and verification. Define the last trustworthy source boundary and any unavailable source range. These measurements support RTO and RPO respectively; six repaired rows alone do not prove either objective.
+
+Repeat the planning exercise with only three hours of source retention after a four-hour outage. Identify the unavailable hour and the authoritative archive/snapshot needed before claiming completeness. [Lesson 0044](0044-reliability-disaster-recovery.md) extends this into retention, regional recovery and catch-up sizing. Preserve the key/value/multiplicity checks here when moving the recovery to another region.
+
 | Previous Lesson | All Lessons | Next Lesson |
 | :--- | :---: | ---: |
-| [0039: Managed Airflow](0039-managed-airflow-environments-dags.md) | [Lesson catalog](index.md) | None yet |
+| [0039: Managed Airflow](0039-managed-airflow-environments-dags.md) | [Lesson catalog](index.md) | [0041: SQL and data modeling](0041-googlesql-data-modeling.md) |

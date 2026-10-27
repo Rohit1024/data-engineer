@@ -2,127 +2,80 @@
 icon: lucide/workflow
 ---
 
-# Apache Beam fundamentals: Pipelines, PCollections, and PTransforms
+# Apache Beam fundamentals: pipelines, collections and transforms
 
-Apache Beam is an open-source, unified programming model for defining parallel batch and streaming data processing pipelines. It decouples pipeline logic from execution runtimes, allowing the same pipeline code to execute on Google Cloud Dataflow, Apache Flink, Apache Spark, or local DirectRunner.
+Build a bounded pipeline locally before deploying its computation to Dataflow. The same logical model covers streaming, but runner support and I/O semantics still need verification.
 
----
+## Describe a graph; let the runner execute it
 
-## Core abstractions in Apache Beam
-
-``` mermaid
+```mermaid
 flowchart TD
-    Driver["Driver Program (Pipeline definition)"] --> ReadSource["Source PTransform (ReadFromText / ReadFromPubSub)"]
-    ReadSource --> PCol1["PCollection 1 (Distributed Dataset)"]
-    PCol1 --> Transform1["ParDo / Map / Filter PTransform"]
-    PCol1 --> Transform2["GroupByKey / Combine PTransform"]
-    Transform1 --> PCol2["PCollection 2"]
-    Transform2 --> PCol3["PCollection 3"]
-    PCol2 --> WriteSink["Sink PTransform (WriteToBigQuery / WriteToGCS)"]
-    PCol3 --> WriteSink
+    A["Pipeline defines a graph"] --> B["Source produces a PCollection"]
+    B --> C["Map, Filter or ParDo transforms elements"]
+    C --> D["Keyed combine aggregates across workers"]
+    D --> E["Sink or assertion consumes results"]
+    E --> F["Runner executes and retries bundles"]
 ```
 
-1. **Pipeline**: Encapsulates the entire directed acyclic graph (DAG) of transformations and execution options.
-2. **PCollection**: An immutable, distributed dataset representing bounded (batch) or unbounded (streaming) records.
-3. **PTransform**: An operation that takes one or more PCollections as input, applies computation, and produces one or more output PCollections.
+A `PCollection` is an immutable distributed collection, not an iterable Python list on the driver. A `PTransform` constructs processing steps. `Map` emits one output per input, `FlatMap` can emit many, `Filter` selects records and `ParDo` supports custom `DoFn` behavior and tagged outputs. `Flatten` combines compatible collections; it is different from flattening one element's nested fields.
 
----
+`GroupByKey` gathers values for a key. `CombinePerKey` can aggregate partial results before a shuffle, reducing transferred data when the operation supports correct merging. A custom combiner must remain correct under different input orders, bundle sizes and merge trees. Floating-point sums need an explicit precision tolerance; use integer minor units for the currency fixture.
 
-## DoFn lifecycle methods
+## Run and verify a complete Python example
 
-The fundamental building block for custom transformations is `beam.DoFn`. Workers execute methods according to this lifecycle:
+[Download batch_totals.py](../examples/beam/batch_totals.py). It uses an in-memory fixture, so no Google Cloud identity or billing is needed. The example environment pins Beam 2.69.0 and Python 3.11 for repeatability; use a separately validated supported SDK/runtime for production.
 
-``` mermaid
-flowchart TD
-    Setup["setup(): Initialize heavy resources once per worker (e.g. database client pool)"] --> StartBundle["start_bundle(): Executed before processing a micro-batch bundle"]
-    StartBundle --> Process["process(element): Executed for every single record in the PCollection"]
-    Process --> Process
-    Process --> FinishBundle["finish_bundle(): Flush buffered writes or commit transactions"]
-    FinishBundle --> Teardown["teardown(): Clean up sockets and connections on worker shutdown"]
+```bash
+uv run --no-project --python 3.11 --with apache-beam==2.69.0 \
+  docs/examples/beam/batch_totals.py
 ```
-
----
-
-## Complete Python batch pipeline example
-
-This pipeline reads raw server logs from Cloud Storage, extracts status codes using a custom `DoFn`, aggregates counts by HTTP status, and writes summary Parquet files:
 
 ```python
 import apache_beam as beam
-from apache_beam.options.pipeline_options import PipelineOptions, GoogleCloudOptions, StandardOptions
-import re
+from apache_beam.testing.util import assert_that, equal_to
 
-class ParseLogLineDoFn(beam.DoFn):
-    def setup(self):
-        # Compiled regex for fast parsing across worker threads
-        self.pattern = re.compile(r'^(\S+) \S+ \S+ \[(.*?)\] "(\S+) (\S+) \S+" (\d{3}) (\d+)')
-
-    def process(self, element: str):
-        match = self.pattern.match(element)
-        if match:
-            ip, timestamp, method, endpoint, status_code, bytes_sent = match.groups()
-            yield {
-                "endpoint": endpoint,
-                "status_code": int(status_code),
-                "bytes": int(bytes_sent)
-            }
-        else:
-            # Drop or route bad records to dead-letter tags
-            pass
-
-def run():
-    options = PipelineOptions()
-    google_cloud_options = options.view_as(GoogleCloudOptions)
-    google_cloud_options.project = "my-gcp-project"
-    google_cloud_options.region = "us-central1"
-    google_cloud_options.temp_location = "gs://my-pipeline-bucket/temp"
-    google_cloud_options.staging_location = "gs://my-pipeline-bucket/staging"
-    options.view_as(StandardOptions).runner = "DataflowRunner"
-
-    with beam.Pipeline(options=options) as p:
-        (
-            p
-            | "ReadLogs" >> beam.io.ReadFromText("gs://my-pipeline-bucket/logs/*.log")
-            | "ParseLogs" >> beam.ParDo(ParseLogLineDoFn())
-            | "FilterErrors" >> beam.Filter(lambda rec: rec["status_code"] >= 400)
-            | "ExtractEndpoint" >> beam.Map(lambda rec: (rec["endpoint"], 1))
-            | "CountErrorsPerEndpoint" >> beam.CombinePerKey(sum)
-            | "FormatOutput" >> beam.Map(lambda kv: f"{kv[0]}: {kv[1]} errors")
-            | "WriteSummary" >> beam.io.WriteToText("gs://my-pipeline-bucket/output/error_counts")
-        )
-
-if __name__ == "__main__":
-    run()
+with beam.Pipeline() as pipeline:
+    totals = (
+        pipeline
+        | "Orders" >> beam.Create([("m1", 2500), ("m1", 4200), ("m2", 1000)])
+        | "Positive amounts" >> beam.Filter(lambda item: item[1] >= 0)
+        | "Sum cents" >> beam.CombinePerKey(sum)
+    )
+    assert_that(totals, equal_to([("m1", 6700), ("m2", 1000)]))
 ```
 
----
+Successful completion proves these expected totals. It does not prove a cloud connector's IAM, throughput or exactly-once behavior. Change the expected m1 value and verify the assertion fails before restoring it. Assertions compare unordered distributed results rather than relying on incidental output order.
 
-## DirectRunner vs DataflowRunner
+## The equivalent Java graph
 
-- **DirectRunner**: Executes locally on your development machine using multi-threading. Use for unit tests and verifying logic on small test fixtures before deploying to the cloud.
-- **DataflowRunner**: Packages the Python environment, spins up autoscaling Compute Engine worker VMs or Streaming Engine backend nodes, and coordinates distributed shuffle operations across petabytes.
+[Download the Java project](../examples/beam-java/pom.xml) and [MerchantTotals.java](../examples/beam-java/src/main/java/lessons/MerchantTotals.java). Run `mvn compile exec:java` from `docs/examples/beam-java` with a compatible JDK and Maven. It creates keyed orders, applies `Sum.longsPerKey()` and checks the same result with `PAssert`. The model is the same even though Java uses explicit coders/types and different transform classes.
 
-```bash
-# Run locally with DirectRunner
-python3 pipeline.py --runner=DirectRunner
+## Retries constrain user code
 
-# Deploy to Google Cloud Dataflow
-python3 pipeline.py \
-    --runner=DataflowRunner \
-    --project=my-gcp-project \
-    --region=us-central1 \
-    --temp_location=gs://my-pipeline-bucket/temp
-```
+A runner can retry a bundle and invoke `process()` again. An external API call inside it can therefore repeat. `setup()` initializes an individual `DoFn` instance; it is not guaranteed to run exactly once per VM. `start_bundle()` and `finish_bundle()` apply to runner-chosen bundles, not business transactions. `teardown()` is best effort and must not hold the only copy of uncommitted output.
 
----
+Use supported sink connectors or durable idempotency keys for external effects. Route malformed records to a tagged error output with source identity and a reason. Silently ignoring parse errors makes a pipeline look healthy while losing data. Avoid recording raw sensitive payloads in unrestricted logs.
 
-## Summary heuristics
+The [Beam programming guide](https://beam.apache.org/documentation/programming-guide/) explains the model and lifecycle. [Pipeline testing](https://beam.apache.org/documentation/pipelines/test-your-pipeline/) covers assertions; [execution behavior](https://beam.apache.org/documentation/runtime/model/) explains retries and bundles.
 
-1. Keep DoFn instances stateless unless using explicit Beam State API markers.
-2. Initialize expensive external clients (database connections, HTTP session pools) inside `setup()`, not inside `process()`.
-3. Use `beam.CombinePerKey` instead of `beam.GroupByKey` followed by a map reduce; `CombinePerKey` applies partial associative reduction on worker nodes before shuffling over the network.
+## Recall and extension
 
----
+1. Why can you not iterate over `totals` like a driver-side list?
+2. Why can `CombinePerKey` move less data than grouping every value?
+3. Would retrying a bundle safely retry a credit-card charge?
+
+??? note "Answers"
+    1. It describes distributed data evaluated by the runner.
+    2. It can combine locally before shuffle and merge partial accumulators.
+    3. Only if the charge operation has its own durable idempotency contract.
+
+Extend the fixture with a malformed order and a rejected-record output. Assert accepted totals and rejected count separately. Then read local newline-delimited JSON through `ReadFromText` using an explicit parser. Move to [windowing](0016-beam-windowing-triggers.md) before grouping an unbounded stream.
+
+## Keyed joins and bounded state
+
+`CoGroupByKey` joins several keyed collections by collecting each input's values for a key/window. A missing dimension produces an empty side, and a dimension with two matching values can multiply facts if the consumer blindly emits every combination. Validate the relationship's intended cardinality before constructing output. For unbounded inputs, compatible windows/triggers and a bounded state policy are essential; a global forever-join can retain data indefinitely. A small bounded reference often fits a side input instead, as in lesson 0017.
+
+For a fixture, join orders `[("c1", 2500), ("c2", 4200)]` with tiers `[("c1", "basic")]`. Predict one matched and one unmatched order. Add a second c1 tier and explain why choosing an arbitrary current tier is invalid for historical reporting.
 
 | Previous Lesson | Curriculum | Next Lesson |
 | :--- | :---: | ---: |

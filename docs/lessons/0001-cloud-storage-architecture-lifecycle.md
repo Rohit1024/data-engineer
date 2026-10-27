@@ -4,153 +4,90 @@ icon: lucide/hard-drive
 
 # Cloud Storage architecture, storage classes, and lifecycle management
 
-Google Cloud Storage (GCS) is an object store backed by Google's global Colossus file system. Unlike POSIX file systems with hierarchical inode trees, GCS uses a flat namespace where slashes in object names are just string prefixes. Understanding this flat namespace and how Colossus distributes shards across storage clusters is essential when designing high-throughput data pipelines.
+Learn how object identity, consistency, placement and retention affect a pipeline's ability to retry and recover. Use the [lab conventions](../references/lab-conventions.md) before running cloud examples.
 
----
+## An object is a versioned value
 
-## Internal architecture and consistency
+A bucket contains named objects. Each replacement creates a new generation. Record the bucket, object name and generation when defining an input batch; a URI alone can point to different bytes tomorrow. Cloud Storage provides strong consistency for object reads, writes, deletes and listing. IAM changes have different propagation behavior, and a cached public response can remain stale.
 
-GCS provides strong global consistency for all read-after-write, read-after-update, and read-after-delete operations. When you upload an object, the request hits a Google Front End (GFE) proxy, routes to the GCS metadata service (Spanner-backed), and chunks the payload across Colossus disk blocks with Reed-Solomon erasure coding.
+The following is a conceptual request path. Google's public object API is the contract; a particular metadata database, erasure-code layout or internal shard threshold is not a configuration you control.
 
-``` mermaid
+```mermaid
 flowchart TD
-    Client["Client / Pipeline Writer"] --> GFE["Google Front End (GFE)"]
-    GFE --> Meta["Metadata Layer (Spanner)"]
-    GFE --> DataLayer["Colossus Storage Engine"]
-    DataLayer --> Chunk1["Chunk 1 (Erasure Coded)"]
-    DataLayer --> Chunk2["Chunk 2 (Erasure Coded)"]
-    DataLayer --> Chunk3["Chunk 3 (Erasure Coded)"]
+    A["Writer uploads bytes"] --> B["Cloud Storage validates request and preconditions"]
+    B --> C["Object generation becomes readable"]
+    C --> D["Reader records name, generation and checksum"]
+    D --> E["Pipeline processes a fixed input identity"]
 ```
 
-Because GCS is an object store:
-- Renaming a directory requires renaming every object with that prefix sequentially. A rename of a 10 TB folder containing 50,000 files is an O(N) operation that takes minutes and costs metadata operations.
-- Appending bytes to an existing object is not supported. You must upload a new object or compose objects using the compose API.
+A flat-namespace bucket interprets `/` as part of an object name. Moving a prefix usually requires object copy/delete work. A bucket created with hierarchical namespace has actual folders and supports atomic folder rename. Neither layout gives you a transaction that atomically publishes arbitrary changes across many objects. For a batch, publish a completion manifest after its data objects are durable. See [consistency](https://docs.cloud.google.com/storage/docs/consistency) and [hierarchical namespace](https://docs.cloud.google.com/storage/docs/hns-overview).
 
----
+## Choose placement before optimizing file names
 
-## Storage classes and pricing dynamics
+Keep the bucket location compatible with the BigQuery dataset or processing job. Regional, dual-region and multi-region buckets differ in placement and availability choices. A multi-region bucket does not mean every query runs locally to every object. Check location compatibility and transfer charges for the actual services.
 
-GCS offers four storage classes. All four share identical throughput, latency (first-byte latency under 100ms), and API surface. The differences lie in cost, minimum storage duration, and data retrieval fees.
+Storage classes trade storage cost against access cost and minimum storage duration:
 
-| Storage class | Minimum storage duration | Retrieval fees | Primary data engineering use case |
-| :--- | :--- | :--- | :--- |
-| **Standard** | None | Free | Hot landing zones, active Spark/Dataflow working directories |
-| **Nearline** | 30 days | $0.01 per GB | Monthly reporting raw extracts, 30-day raw event staging |
-| **Coldline** | 90 days | $0.02 per GB | Quarterly audit logs, historical snapshots accessed once per quarter |
-| **Archive** | 365 days | $0.05 per GB | Regulatory cold storage, compliance archives |
+| Class | Minimum duration | Example |
+| --- | --- | --- |
+| Standard | None | Daily ingestion and Spark temporary output |
+| Nearline | 30 days | Raw extracts read approximately monthly |
+| Coldline | 90 days | Quarterly recovery archives |
+| Archive | 365 days | Long-lived evidence rarely restored |
 
-!!! warning "Early deletion penalties"
-    If you overwrite or delete an object in Coldline after 15 days, GCP charges you for the remaining 75 days at the Coldline rate. Do not use Nearline or Coldline for transient pipeline landing zones that get wiped daily.
+Retrieval, operations, early deletion and network transfer can outweigh a lower storage rate. Use the current [storage-class documentation](https://docs.cloud.google.com/storage/docs/storage-classes) for your region rather than memorizing a dollar price. Autoclass can manage transitions for suitable access patterns; review its own charges and constraints.
 
----
+## Make a retry conditional
 
-## Object lifecycle management
+Set `PROJECT_ID` and choose a globally unique bucket name. These commands create a billable lab resource:
 
-Object Lifecycle Management runs asynchronous evaluation sweeps once per day. You define rules in a JSON configuration and apply them to the bucket.
+```bash
+export LAKE_BUCKET="${PROJECT_ID}-storage-audit-lab"
+gcloud storage buckets create "gs://${LAKE_BUCKET}" \
+  --location=us-central1 --uniform-bucket-level-access
+printf '%s\n' '{"event_id":"e1","amount_cents":2500}' > event.json
+gcloud storage cp event.json "gs://${LAKE_BUCKET}/raw/batch-001.json" \
+  --if-generation-match=0
+gcloud storage objects describe "gs://${LAKE_BUCKET}/raw/batch-001.json"
+```
 
-### Lifecycle rule definition
+The zero generation precondition allows creation only if there is no live object with that name. Run the upload again: expect a precondition failure rather than an overwrite. Verify the existing generation and checksum before treating that failure as a successful retry. An existing name with different bytes is a conflict. See [request preconditions](https://docs.cloud.google.com/storage/docs/request-preconditions).
 
-Save this rule as `lifecycle.json`:
+## Retention and lifecycle solve different problems
+
+Versioning preserves noncurrent versions after replacement. Soft delete retains deleted objects for its configured recovery period. A retention policy prevents premature deletion. These controls can retain billable bytes even when an application requests deletion.
+
+Save this as `lifecycle.json`, then apply it to the lab bucket:
 
 ```json
-{
-  "rule": [
-    {
-      "action": {
-        "type": "SetStorageClass",
-        "storageClass": "NEARLINE"
-      },
-      "condition": {
-        "age": 30,
-        "matchesPrefix": ["raw/events/"]
-      }
-    },
-    {
-      "action": {
-        "type": "SetStorageClass",
-        "storageClass": "COLDLINE"
-      },
-      "condition": {
-        "age": 90,
-        "matchesPrefix": ["raw/events/"]
-      }
-    },
-    {
-      "action": {
-        "type": "Delete"
-      },
-      "condition": {
-        "age": 365,
-        "matchesPrefix": ["raw/events/"]
-      }
-    }
-  ]
-}
+{"rule":[
+  {"action":{"type":"SetStorageClass","storageClass":"NEARLINE"},
+   "condition":{"age":30,"matchesPrefix":["raw/"]}},
+  {"action":{"type":"Delete"},
+   "condition":{"age":120,"matchesPrefix":["raw/"]}}
+]}
 ```
-
-Apply the policy with `gcloud`:
 
 ```bash
-gcloud storage buckets update gs://my-lakehouse-bucket \
-    --lifecycle-file=lifecycle.json
+gcloud storage buckets update "gs://${LAKE_BUCKET}" --lifecycle-file=lifecycle.json
 ```
 
----
+Lifecycle actions are asynchronous. Age 120 is an eligibility condition, not a guaranteed deletion timestamp. Retention and holds can block deletion; soft delete can preserve recoverable data afterward. Define rules for noncurrent versions if you enable versioning. See [lifecycle management](https://docs.cloud.google.com/storage/docs/lifecycle).
 
-## High-throughput write patterns and naming
+For high request rates, ramp traffic gradually, distribute hot prefixes where necessary and compact tiny files. Measure throttling and latency. Published initial request-rate guidance is not a permanent per-shard capacity limit.
 
-GCS automatically splits index ranges as request volume increases. Each partition can handle approximately 1,000 write requests per second and 5,000 read requests per second before autoscaling.
+## Recall exercise: predict, run, explain
 
-If your ingestion pipeline writes thousands of objects per second, avoid sequential timestamp prefixes like `gs://bucket/2026-08-20/0001.parquet`. Sequential naming routes all initial traffic to a single backend shard.
+1. A file is replaced under the same URI between load retries. What identifies the original input?
+2. Why can a lifecycle delete rule fail to reduce stored bytes immediately?
+3. Would atomic folder rename alone prove a downstream BigQuery load completed?
 
-``` mermaid
-flowchart TD
-    subgraph AntiPattern["Anti-Pattern: Sequential Timestamps"]
-        Seq1["ts_1000.parquet"] --> ShardA["Single GCS Shard (Throttled at 1,000 req/s)"]
-        Seq2["ts_1001.parquet"] --> ShardA
-        Seq3["ts_1002.parquet"] --> ShardA
-    end
+??? note "Answers"
+    1. Its generation, with retained bytes and checksum for replay.
+    2. Evaluation is asynchronous; retention, noncurrent versions or soft delete can retain bytes.
+    3. No. Folder publication and warehouse-job completion are separate operations.
 
-    subgraph BestPractice["Best Practice: Hash or Distributed Prefix"]
-        Hash1["a8f1_ts_1000.parquet"] --> Shard1["Shard 1"]
-        Hash2["3b0c_ts_1001.parquet"] --> Shard2["Shard 2"]
-        Hash3["f9e2_ts_1002.parquet"] --> Shard3["Shard 3"]
-    end
-
-    AntiPattern ~~~ BestPractice
-```
-
----
-
-## Hands-on exercise: Bucket configuration and verification
-
-Create a dual-region bucket with uniform bucket-level access, object versioning, and an automated lifecycle policy:
-
-```bash
-# 1. Create a dual-region bucket for high availability in europe-west1 and europe-west4
-gcloud storage buckets create gs://de-landing-zone-prod-01 \
-    --location=EUROPE-WEST1 \
-    --placement=europe-west1,europe-west4 \
-    --default-storage-class=STANDARD \
-    --uniform-bucket-level-access
-
-# 2. Enable object versioning to protect against accidental deletes
-gcloud storage buckets update gs://de-landing-zone-prod-01 \
-    --versioning
-
-# 3. Verify bucket configuration
-gcloud storage buckets describe gs://de-landing-zone-prod-01 --format="yaml(name, location, storageClass, versioning)"
-```
-
----
-
-## Key takeaways and operational heuristics
-
-1. GCS offers strong global read-after-write consistency, but directory renames are slow client-side batch copy-and-delete operations.
-2. Match storage class minimum durations to pipeline retention periods. Standard is the right default for any data modified within 30 days.
-3. For streaming pipelines writing more than 1,000 files per second, prepend hash prefixes or distribute keys to avoid hotspotting storage index ranges.
-
----
+After inspecting the generation, remove this dedicated lab bucket with `gcloud storage rm --recursive "gs://${LAKE_BUCKET}"`. Review retained versions and soft-delete storage if you enabled those controls.
 
 | Previous Lesson | Curriculum | Next Lesson |
 | :--- | :---: | ---: |

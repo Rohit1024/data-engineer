@@ -2,123 +2,99 @@
 icon: lucide/upload-cloud
 ---
 
-# BigQuery Storage Write API: Streaming ingestion and exactly-once semantics
+# BigQuery Storage Write API: streams, offsets and commit boundaries
 
-The BigQuery Storage Write API replaces the legacy `tabledata.insertAll` streaming API. It streams records directly into BigQuery storage via bidirectional gRPC connections using Protocol Buffers (Protobuf), providing higher throughput, lower cost (50% cheaper than legacy streaming), and exactly-once delivery guarantees.
+An exactly-once append guarantee needs a defined identity and scope. The Storage Write API can deduplicate appends within an application-created stream when the writer supplies offsets. It does not infer unique order IDs.
 
----
+## Choose a stream type
 
-## Architectural evolution: Legacy streaming vs Storage Write API
+| Stream | Visibility | Recovery responsibility |
+| --- | --- | --- |
+| Default | Rows become available after successful writes | At-least-once writes; business deduplication outside the stream |
+| Application-created committed | Immediate after successful appends | Persist stream name, payload and explicit row offsets |
+| Pending | Hidden until finalized streams are batch-committed | Coordinate workers, finalize each stream and check commit results |
+| Buffered | Controlled through flush offsets | Specialized visibility control; follow the API's semantics |
 
-``` mermaid
+Rows serialize as supported Protobuf/Arrow messages rather than arbitrary JSON dictionaries. The initial writer schema must match the destination. A network request can succeed while the response is lost, so treat append outcomes as confirmed, rejected or ambiguous.
+
+```mermaid
 flowchart TD
-    subgraph LegacyStreaming["Legacy tabledata.insertAll (Deprecated Pattern)"]
-        ClientOld["Client"] -->|"JSON over HTTP POST"| APIOld["REST API Gateway"]
-        APIOld -->|"JSON Parsing Overhead"| BufferOld["Streaming Buffer"]
-    end
-
-    subgraph StorageWriteAPI["Storage Write API (gRPC + Protobuf)"]
-        ClientNew["Client Streamer"] -->|"Binary Protobuf over gRPC"| BQWrite["Storage Write Endpoint"]
-        BQWrite -->|"Direct Commit / Append"| Capacitor["Capacitor Storage Blocks"]
-    end
-
-    LegacyStreaming ~~~ StorageWriteAPI
+    A["Persist stream identity, payload and next row offset"] --> B["Append two rows at offset 0"]
+    B --> C{"Response received?"}
+    C -->|"Yes, success"| D["Advance checkpoint to offset 2"]
+    C -->|"No"| E["Retry the same payload at offset 0"]
+    E --> F["Resolve success or existing-offset response"]
+    F --> D
 ```
 
-Key advantages of the Storage Write API:
-- **Binary serialization**: Protocol Buffers eliminate JSON encoding and decoding CPU bottlenecks.
-- **Stream connection reuse**: A single gRPC connection streams millions of rows continuously.
-- **Atomic multi-stream commits**: Transactions can write to multiple streams in parallel and commit atomically in a single RPC.
+Offsets count rows, not requests. Appending three rows at offset 0 means the next append starts at 3. `ALREADY_EXISTS` can indicate the earlier append occupied that offset; `OUT_OF_RANGE` can mean there is a gap. Correct interpretation depends on the persisted stream/payload mapping. Do not silently switch streams after a timeout. See [gRPC write semantics](https://docs.cloud.google.com/bigquery/docs/write-api-grpc) and [retry guidance](https://docs.cloud.google.com/bigquery/docs/write-api-best-practices).
 
----
+## Run a complete default-stream example
 
-## Stream modes and semantics
+Create a disposable dataset in `us-central1`, then this table. The identity needs table write access and access to the BigQuery Storage API. Use ADC, not a credential file committed to the repository.
 
-| Stream mode | Visibility | Delivery guarantee | Best use case |
-| :--- | :--- | :--- | :--- |
-| **Committed stream** | Immediate | Exactly-once via explicit stream offsets | Real-time dashboards, low-latency log streams |
-| **Pending stream** | Hidden until commit | Exactly-once across distributed workers | Batch ETL jobs, Dataflow streaming pipelines |
-| **Buffered stream** | Intermediate flush | Exactly-once via manual flush tokens | Micro-batch applications |
-| **Default stream** | Immediate | At-least-once (no stream offsets) | High-volume fire-and-forget ingestion |
-
----
-
-## Stream offset management and exactly-once guarantees
-
-In **Committed** and **Pending** modes, each write request must include a monotonically increasing 0-indexed stream offset:
-
-``` mermaid
-flowchart TD
-    Client["Writer Worker"] -->|"Append Rows (Offset: 0..99)"| Stream["Committed Stream"]
-    Stream -->|"Ack: Next expected offset = 100"| Client
-    Client -->|"Network Failure / Retry (Offset: 0..99)"| Stream
-    Stream -->|"Duplicate detected: Rejected (ALREADY_EXISTS)"| Client
-    Client -->|"Append Rows (Offset: 100..199)"| Stream
-    Stream -->|"Ack: Next expected offset = 200"| Client
+```sql
+CREATE TABLE `YOUR_PROJECT_ID.raw.write_api_lab` (
+  order_id STRING, version INT64
+);
 ```
 
-If a network timeout occurs, re-sending the batch with the identical offset prevents duplicate records from being written.
-
----
-
-## Streaming rows in Python using default stream
-
-The default stream provides immediate write availability without manually opening and closing stream objects:
+Save as `write_default.py`, install `google-cloud-bigquery-storage` and `protobuf`, and set `WRITE_TABLE` to `projects/YOUR_PROJECT_ID/datasets/raw/tables/write_api_lab`.
 
 ```python
-from google.cloud.bigquery_storage_v1 import BigQueryWriteClient, types
-from google.protobuf import descriptor_pb2
+import os
+from google.cloud import bigquery_storage_v1
+from google.cloud.bigquery_storage_v1 import types, writer
+from google.protobuf import descriptor_pb2, descriptor_pool, message_factory
 
-write_client = BigQueryWriteClient()
-parent_table = "projects/my-gcp-project/datasets/raw_staging/tables/telemetry"
-
-# Initialize default write stream path
-write_stream = f"{parent_table}/streams/_default"
-
-# Define row payload serialized into binary protobuf format
-# (In production, generate classes from your .proto schema)
-proto_rows = types.ProtoRows()
-# Append binary serialized protobuf instances to proto_rows.serialized_rows
-
+file = descriptor_pb2.FileDescriptorProto(
+    name="orders.proto", package="lab", syntax="proto2"
+)
+message = file.message_type.add(name="Order")
+message.field.add(name="order_id", number=1, label=1, type=9)
+message.field.add(name="version", number=2, label=1, type=3)
+pool = descriptor_pool.DescriptorPool()
+Order = message_factory.GetMessageClass(
+    pool.Add(file).message_types_by_name["Order"]
+)
+schema = types.ProtoSchema()
+Order.DESCRIPTOR.CopyToProto(schema.proto_descriptor)
+template = types.AppendRowsRequest(
+    write_stream=os.environ["WRITE_TABLE"] + "/streams/_default",
+    proto_rows=types.AppendRowsRequest.ProtoData(writer_schema=schema),
+)
+row = Order(order_id="o1", version=1)
 request = types.AppendRowsRequest(
-    write_stream=write_stream,
     proto_rows=types.AppendRowsRequest.ProtoData(
-        rows=proto_rows
+        rows=types.ProtoRows(serialized_rows=[row.SerializeToString()])
     )
 )
-
-# Stream requests through gRPC
-stream = write_client.append_rows(iter([request]))
-for response in stream:
-    if response.error.code != 0:
-        print(f"Write error: {response.error.message}")
-    else:
-        print("Batch appended successfully.")
+with bigquery_storage_v1.BigQueryWriteClient() as client:
+    with writer.AppendRowsStream(client, template) as stream:
+        response = stream.send(request).result()
+        print(response)
 ```
 
----
+Expect one `o1 / 1` row after a successful append. Run it twice and expect two rows. This intentionally demonstrates default-stream semantics rather than falsely claiming business uniqueness. The [official Protobuf example](https://docs.cloud.google.com/bigquery/docs/samples/bigquerystorage-append-rows-raw-proto2) shows a generated-message alternative.
 
-## Batch atomic commits with pending streams
+## Pending streams are a separate transaction boundary
 
-For multi-worker pipelines (e.g. Spark or Dataflow workers writing distributed shards):
-1. The driver creates a parent session with `PENDING` mode.
-2. Each worker writes its partition to a dedicated child stream.
-3. Once all workers finish successfully, the driver executes `batch_commit_write_streams`. All records become visible to queries in a single millisecond transaction. If any worker fails, no records commit.
+For a distributed batch, create pending streams on the destination table. Workers append with their assigned offsets. The coordinator finalizes all successful streams, then calls `BatchCommitWriteStreams` and checks its per-stream errors. Rows remain invisible before commit. A worker failing does not magically roll back already-created resources, and a coordinator must not publish a partial batch because only some workers finished. This is not a transaction across arbitrary tables or external systems. See [pending-stream batch loading](https://docs.cloud.google.com/bigquery/docs/write-api-batch-load).
 
-```bash
-# Verify write metrics on target table
-bq show --format=prettyjson my-gcp-project:raw_staging.telemetry
-```
+Schema changes, serialization errors, quotas and backpressure still matter. Validate row errors, reuse connections, bound in-flight bytes and reconcile acknowledged records with the destination. Cost depends on current ingestion pricing and workload, not a permanent percentage discount versus `insertAll`.
 
----
+## Recall and failure drill
 
-## Summary heuristics
+1. A request with five rows starts at offset 10. What is the next offset?
+2. Would using offset 10 in a new stream deduplicate the old stream's rows?
+3. Why can two distinct messages for order o1 still produce two rows?
 
-1. Use the **Default stream** for simplicity when at-least-once delivery is acceptable and downstream views handle deduplication.
-2. Use **Pending streams** when replacing batch file loads, ensuring all worker writes commit atomically or abort cleanly.
-3. Always migrate from legacy `insertAll` to the Storage Write API to cut streaming ingestion costs in half.
+??? note "Answers"
+    1. 15.
+    2. No. The offset is scoped to its stream.
+    3. Append uniqueness and entity/event uniqueness are different contracts. Use a business event key or version-aware current-state transformation.
 
----
+Drop the dedicated lab table after inspection. Retain stream/checkpoint evidence when testing ambiguous failures in a larger lab.
 
 | Previous Lesson | Curriculum | Next Lesson |
 | :--- | :---: | ---: |

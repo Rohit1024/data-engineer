@@ -4,13 +4,13 @@ icon: lucide/zap
 
 # Materialized views, BI Engine, and query acceleration in BigQuery
 
-BigQuery provides two native acceleration technologies to achieve sub-second dashboard latencies without moving data to caching clusters: Materialized Views (MVs) and BigQuery BI Engine.
+Materialized views can avoid repeated computation, while BI Engine can accelerate supported queries using reserved memory. Measure their benefit against the dashboard's freshness and latency requirements.
 
 ---
 
 ## Materialized Views: Automatic query rewrite and incremental refresh
 
-A Materialized View precomputes aggregations and joins on disk. When the base table receives new inserts, BigQuery updates the materialized view incrementally in the background without scanning the entire historical table.
+A materialized view stores a query result. Eligible incremental definitions can process supported changes without recomputing the entire result. SQL shape and base-table mutations determine whether incremental maintenance and smart tuning are available.
 
 ``` mermaid
 flowchart TD
@@ -21,7 +21,7 @@ flowchart TD
     Optimizer --> SmartRewrite{"Can Smart Query Rewrite Apply?"}
     SmartRewrite -- "Yes" --> Combine["Combine MV Aggregates + Delta from New Inserts"]
     SmartRewrite -- "No" --> FullScan["Full Scan on Base Table"]
-    Combine --> FastResult["Sub-Second Result (Scanned 5 MB instead of 5 TB)"]
+    Combine --> FastResult["Eligible accelerated result"]
 ```
 
 ### Smart query rewrite
@@ -40,7 +40,7 @@ OPTIONS (
 ) AS
 SELECT
   merchant_id,
-  DATE(order_timestamp) AS order_date,
+  DATE(event_timestamp) AS order_date,
   COUNT(1) AS total_orders,
   SUM(order_amount) AS gross_revenue,
   AVG(order_amount) AS average_order_value
@@ -59,7 +59,7 @@ flowchart TD
     Dashboard["Looker / Tableau / Connected Sheets"] --> BIQuery["SQL Dashboard Query"]
     BIQuery --> BIEngine["BI Engine In-Memory Cache (RAM)"]
     BIEngine --> Match{"Data Cached in BI RAM?"}
-    Match -- "Full Match" --> InMemEval["Sub-100ms In-Memory Vector Execution"]
+    Match -- "Full Match" --> InMemEval["Vectorized in-memory execution"]
     Match -- "Partial / Miss" --> DremelFallback["Fallback to Dremel On-Demand Slots"]
 ```
 
@@ -67,22 +67,7 @@ flowchart TD
 
 BI Engine is provisioned per region and charges a flat hourly fee per GB of reserved RAM:
 
-```bash
-# Reserve 50 GB of BI Engine in-memory cache in us-central1
-gcloud bigquery bi-reservation create \
-    --project=my-gcp-project \
-    --location=us-central1 \
-    --size=50G
-```
-
-You can target specific tables or schemas to ensure BI memory is not occupied by ad-hoc queries:
-
-```bash
-# Verify BI Engine reservation
-gcloud bigquery bi-reservation describe \
-    --project=my-gcp-project \
-    --location=us-central1
-```
+In the BigQuery console, open **BI Engine → Create reservation**, select the project and region, and choose capacity after measuring the dashboard's active data. Configure preferred tables if the workload needs them. Creating a reservation consumes billable capacity. Follow the [BI Engine reservation guide](https://docs.cloud.google.com/bigquery/docs/bi-engine-reserve-capacity) for supported API or console steps.
 
 ---
 
@@ -95,7 +80,6 @@ SELECT
   job_id,
   query,
   bi_engine_statistics.bi_engine_mode,
-  bi_engine_statistics.acceleration_mode,
   bi_engine_statistics.bi_engine_reasons
 FROM `region-us`.INFORMATION_SCHEMA.JOBS_BY_PROJECT
 WHERE creation_time > TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 1 HOUR)
@@ -118,6 +102,23 @@ Possible `bi_engine_mode` statuses:
 3. Use `max_staleness` on Materialized Views to allow BigQuery to serve fast cached results without blocking on recent unmaterialized streaming inserts.
 
 ---
+
+## Decide which acceleration mechanism solves the problem
+
+The result cache reuses eligible query results. A materialized view stores a maintained result that can reduce repeated aggregation work. BI Engine accelerates supported operations using reserved memory. These mechanisms have different eligibility, freshness and cost boundaries; they do not guarantee every dashboard query finishes in less than a second.
+
+For 100 million order rows grouped into 10,000 merchant/day combinations, an eligible materialized view can avoid repeatedly processing the full aggregation. A new append can be combined with maintained data when supported. Updates, deletes, join shape or unsupported SQL can prevent incremental maintenance or smart tuning. Inspect the execution plan and materialized-view statistics rather than assuming the optimizer used the view.
+
+`max_staleness` is a deliberate freshness allowance when querying the view. It does not make an arbitrary base-table query stale, and a refresh interval is not a strict freshness SLA. The example's 30-minute refresh interval and 15-minute staleness allowance can require base-data work when a refresh is older than the allowance. Align those settings with the dashboard's actual freshness requirement.
+
+## Exercise with expected evidence
+
+Run a base-table aggregate with result caching disabled, then an equivalent eligible query after creating the materialized view. Record bytes, slot-ms, refresh state and rewrite evidence. Next run a query that requires a column absent from the view and explain the fallback. With BI Engine, inspect `FULL`, `PARTIAL` or `DISABLED` and the reason fields; a reservation alone proves no acceleration.
+
+??? note "Recall answer"
+    A faster repeated query might be result-cache reuse, materialized-view reuse, BI Engine, or a different execution plan. Use job statistics to identify the mechanism before attributing the improvement.
+
+Sources: [materialized-view creation](https://docs.cloud.google.com/bigquery/docs/materialized-views-create), [smart tuning and use](https://docs.cloud.google.com/bigquery/docs/materialized-views-use), and [BI Engine overview](https://docs.cloud.google.com/bigquery/docs/bi-engine-intro).
 
 | Previous Lesson | Curriculum | Next Lesson |
 | :--- | :---: | ---: |

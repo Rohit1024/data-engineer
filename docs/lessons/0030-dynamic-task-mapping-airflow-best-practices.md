@@ -81,15 +81,18 @@ dynamic_pipeline()
 
 XCom (cross-communication) allows tasks to exchange small amounts of state (metadata, file paths, record counts).
 - **Default behavior**: XCom payloads are serialized as JSON and stored in the Airflow Cloud SQL metadata database. Storing DataFrames or large dictionaries bloats the database and degrades scheduler performance.
-- **Size threshold**: Keep database XCom payloads under **48 KB**.
+- **Size policy**: Keep payloads small and enforce a project-specific budget. Limits depend on the Airflow version, backend and serialization; 48 KB is not a universal modern limit.
 
 ### GCS XCom backend for large payloads
 For exchanging large datasets or complex data structures, configure a custom GCS XCom backend in `airflow.cfg`:
 
 ```ini
 [core]
-xcom_backend = airflow.providers.google.cloud.xcom_backends.gcs.GCSXComBackend
-xcom_gcs_bucket_name = my-composer-xcom-bucket
+xcom_backend = airflow.providers.common.io.xcom.backend.XComObjectStorageBackend
+
+[common.io]
+xcom_objectstorage_path = gs://google_cloud_default@my-composer-xcom-bucket/xcom
+xcom_objectstorage_threshold = 1048576
 ```
 
 Airflow automatically serializes outputs to GCS objects and passes URI pointers between tasks.
@@ -103,6 +106,22 @@ Airflow automatically serializes outputs to GCS objects and passes URI pointers 
 3. Never pass raw data payloads or DataFrames through default database XComs; pass GCS URIs or table IDs instead.
 
 ---
+
+## Mapping controls orchestration size as well as service load
+
+`.expand()` creates task instances for runtime inputs; it does not distribute a Python loop inside one task across a data-processing engine. One million files mapped individually can overwhelm scheduler/metadata capacity before workers do useful work. Group files into bounded manifests or partitions and map those batches. Check the installed Airflow mapping limit and use pools plus task/DAG concurrency controls.
+
+`expand(a=[1, 2], b=[3, 4])` maps a Cartesian product, which can create four combinations. Use the supported zip mechanism when the intent is paired inputs. `.partial()` binds constant operator arguments while `.expand()` supplies mapped ones. An empty mapped input can skip tasks; define whether empty input is expected, an error or a reason to preserve previous output.
+
+The example's `record_count=1500` is a fabricated demonstration value, not validation evidence. For a real check, have each task inspect its small fixture or submit an external validation job and return observed counts. [Lesson 0039's mapped DAG](0039-managed-airflow-environments-dags.md#7-dag-3-map-checks-over-a-runtime-file-list) supplies actual parsing, failure behavior and expected totals.
+
+The object-storage backend above requires compatible `common-io`/Google filesystem dependencies and configured credentials; verify it against the managed image before changing environment configuration. It stores large serialized values outside the metadata database, but is not a reason to route bulk analytical data through XCom. Pass a URI/table identifier and a checksum/boundary instead. See the [official backend configuration](https://airflow.apache.org/docs/apache-airflow-providers-common-io/stable/xcom_backend.html).
+
+## Exercise with expected results
+
+Map checks over two three-row fixtures and expect six observed rows. Add a third fixture and expect three mapped instances and nine rows. Then supply an empty list and inspect actual downstream state. Explain how `max_active_tis_per_dag=2` affects scheduling without changing total task count. Finally fail one mapped check and prove the final report cannot falsely publish success.
+
+Source: [Airflow 2.11 dynamic mapping](https://airflow.apache.org/docs/apache-airflow/2.11.0/authoring-and-scheduling/dynamic-task-mapping.html).
 
 | Previous Lesson | Curriculum | Next Lesson |
 | :--- | :---: | ---: |

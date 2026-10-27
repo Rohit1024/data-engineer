@@ -17,7 +17,8 @@ flowchart TD
     CloudBuild --> Spec["Flex Template Spec File (gs://my-bucket/templates/pipeline.json)"]
     Spec --> Trigger["Launch Request (gcloud / Airflow / Cloud Function)"]
     Trigger --> DataflowService["Dataflow Service Coordinator"]
-    DataflowService --> WorkerVMs["Autoscaled Worker Pool (Pulls Docker Image)"]
+    DataflowService --> Launcher["Launcher VM pulls template image and constructs graph"]
+    Launcher --> WorkerVMs["Workers run the selected Beam SDK environment"]
 ```
 
 ---
@@ -107,6 +108,25 @@ output_table="my-gcp-project:analytics_mart.realtime_orders"
 3. Validate parameter types and regex rules in `metadata.json` to catch operator configuration errors before workers boot.
 
 ---
+
+## A launcher image is not automatically the worker SDK image
+
+The Flex Template container starts the pipeline launcher. Worker SDK containers run the element-processing code. Installing a package in the launcher does not by itself prove every worker has it. Use supported dependency staging or a compatible custom SDK container, and keep the launch SDK version consistent with the worker environment. See [Flex Template configuration](https://docs.cloud.google.com/dataflow/docs/guides/templates/configuring-flex-templates) and [custom SDK containers](https://docs.cloud.google.com/dataflow/docs/guides/run-custom-container).
+
+The Dockerfile above demonstrates packaging; `main.py` must actually parse `input_subscription` and `output_table`, preserve runner-supplied pipeline options, construct the graph and wait appropriately. A metadata parameter only describes an argument. It does not implement its behavior. The complete service-managed template lab in [0037](0037-bigquery-ingestion-etl-elt-lab.md#6-method-d-dataflow-streaming-etl) is the runnable reference path.
+
+For a reproducible release, pin dependency versions, launcher base image and custom SDK image digest. Use immutable template-spec names such as `templates/orders/REVISION.json`. Replacing one `latest` JSON or image tag can make a rollback run different code from the original job.
+
+Separate the build identity, job launcher, Dataflow service agent and worker service account. The build identity pushes artifacts; the launcher submits/acts as the worker; workers read source data, stage dependencies and write sinks. Private workers also need permitted network access to APIs, artifacts and staged packages.
+
+## Release and rollback exercise
+
+Build a sandbox template, record its image digest/spec generation and run ID, then deliberately supply an invalid subscription path. Expect parameter validation or a visible launch failure, not a running job with silently ignored parameters. Next remove a worker-only dependency and distinguish launcher success from worker import failure.
+
+??? note "Expected reasoning"
+    A successful container build proves packaging completed. A successful launch proves graph submission. A healthy worker and reconciled sink prove more of the runtime path. For rollback, use the recorded immutable artifacts and test state/source compatibility; an older image alone does not restore streaming checkpoints.
+
+See [template troubleshooting](https://docs.cloud.google.com/dataflow/docs/guides/troubleshoot-templates) for launch-network and dependency failures.
 
 | Previous Lesson | Curriculum | Next Lesson |
 | :--- | :---: | ---: |

@@ -49,9 +49,9 @@ flowchart TD
 ```
 
 ### Benefits of Streaming Engine
-- Worker VMs consume less CPU and memory since they no longer run local RocksDB state stores.
+- Worker VMs consume less CPU and memory because the managed backend handles streaming state and shuffle; do not assume a specific local state-store implementation.
 - Autoscaling is fast and responsive because scaling down a worker does not require copying gigabytes of local state to another VM.
-- Persistent disk sizes on worker VMs can be reduced to the minimum 30 GB.
+- Worker disk requirements can be reduced for suitable workloads. Use the selected runner/job configuration's supported sizing rather than assuming one universal minimum.
 
 Enable via CLI:
 
@@ -75,10 +75,10 @@ For batch workloads, **Dataflow Shuffle Service** moves the shuffle operation of
 FlexRS reduces batch pipeline compute costs by up to 40% by pairing regular Compute Engine VMs with Spot/Preemptible VMs and deferring execution within a 6-hour scheduling window.
 
 ```bash
-gcloud dataflow jobs run monthly-billing-aggregation \
-    --gcs-location=gs://my-templates/billing.json \
-    --region=us-central1 \
-    --parameters=flexRSGoal=COST_OPTIMIZED,tempLocation=gs://my-bucket/temp
+python batch_pipeline.py --runner=DataflowRunner \
+    --project=YOUR_PROJECT_ID --region=us-central1 \
+    --temp_location=gs://YOUR_BUCKET/temp \
+    --flexrs_goal=COST_OPTIMIZED
 ```
 
 ---
@@ -87,20 +87,36 @@ gcloud dataflow jobs run monthly-billing-aggregation \
 
 | Metric name | Healthy state | Troubleshooting trigger |
 | :--- | :--- | :--- |
-| **System Latency** | Under 10 seconds | Rising latency indicates worker CPU saturation or downstream sink throttling |
-| **Data Watermark Lag** | 2 to 15 seconds | Growing watermark lag means unclosed windows or stuck DoFn loops |
+| **System latency** | Meets the pipeline freshness objective | Rising latency indicates worker CPU saturation or downstream sink throttling |
+| **Watermark age** | Consistent with source timestamps and window policy | Growing watermark lag means unclosed windows or stuck DoFn loops |
 | **Throughput (elements/sec)** | Steady or matching source rate | Sudden drops point to backpressure from slow external API calls |
-| **CPU Utilization** | 70% to 85% | Under 20% indicates I/O blocking; over 95% triggers horizontal autoscaling |
+| **CPU utilization** | Interpret with backlog, parallelism and I/O | Low CPU can mean I/O or limited parallelism; high CPU alone does not guarantee autoscaling |
 
 ---
 
 ## Summary heuristics
 
-1. Always enable `--enable_streaming_engine` for streaming production pipelines to reduce VM footprint and enable fast autoscaling.
+1. Evaluate Streaming Engine for supported streaming workloads to offload state/shuffle and improve scaling behavior. Confirm the processing mode, regional support and cost model.
 2. Use FlexRS (`--flexrs_goal=COST_OPTIMIZED`) for non-urgent daily or weekly batch pipelines to slash compute costs.
 3. Insert `beam.Reshuffle()` when a single worker becomes a bottleneck after a high fan-out transform.
 
 ---
+
+## Exactly-once processing and external effects
+
+Dataflow's processing mode and a sink's delivery contract are separate. A `DoFn` that calls an external payment API can execute again after a retry. Use supported connectors and idempotent external operation IDs; do not infer global exactly-once business behavior from a runner setting. Compare at-least-once streaming mode only when your workload can tolerate or explicitly resolve repeat processing.
+
+For diagnosis, consider a pipeline receiving 20,000 events/s but writing 15,000 events/s. Backlog grows by 5,000 events/s, or 18 million/hour. Adding workers helps only if worker capacity is the bottleneck. A serialized hot key, BigQuery quota or slow external service can limit throughput regardless of the maximum worker setting.
+
+Fusion eliminates unnecessary materialization but can constrain parallelism after a fan-out. `Reshuffle` can create a redistribution boundary; it adds serialization/shuffle overhead and does not split state for one hot key. Inspect the physical stages before inserting it.
+
+Drain and cancel also differ. Drain processes buffered work under the runner's drain semantics and can advance/close windows; cancel stops work without that completion behavior. Test state compatibility before a streaming job update and retain source replay coverage before replacement.
+
+## Exercise with expected evidence
+
+Inject a slow external call into a disposable pipeline. Record source rate, backlog growth, worker CPU and sink throughput. Predict whether more workers help, then compare. Repeat with a single hot key. Explain why the second case can remain slow despite idle capacity.
+
+Sources: [exactly-once processing](https://docs.cloud.google.com/dataflow/docs/concepts/exactly-once), [Streaming Engine](https://docs.cloud.google.com/dataflow/docs/streaming-engine), and [FlexRS](https://docs.cloud.google.com/dataflow/docs/guides/flexrs).
 
 | Previous Lesson | Curriculum | Next Lesson |
 | :--- | :---: | ---: |

@@ -45,7 +45,7 @@ When configuring 8-core, 32 GB RAM worker VMs (`n2-standard-8`):
 
 ## Partition sizing heuristics
 
-Target **128 MB to 200 MB** per partition in memory:
+Use **128 MiB to 200 MiB** of shuffle/input data per partition as an initial experiment, then measure decoded memory, skew and task duration:
 - **Too many small partitions**: High task scheduling overhead on the Spark driver and millions of tiny files written to GCS.
 - **Too few large partitions**: Risk of executor OOMs during shuffle and underutilized CPU cores.
 
@@ -85,7 +85,7 @@ flowchart TD
 ### Salting technique in PySpark
 
 ```python
-from pyspark.sql.functions import concat, lit, rand, floor
+from pyspark.sql.functions import array, col, concat, explode, lit, rand, floor
 
 # 1. Add random salt (0-9) to the skewed large table
 skewed_df_salted = skewed_df.withColumn(
@@ -112,7 +112,7 @@ spark.sql.adaptive.enabled=true
 spark.sql.adaptive.coalescePartitions.enabled=true
 spark.sql.adaptive.skewJoin.enabled=true
 spark.sql.adaptive.skewJoin.skewedPartitionFactor=5
-spark.sql.autoBroadcastJoinThreshold=67108864 # 64 MB broadcast join threshold
+spark.sql.autoBroadcastJoinThreshold=67108864
 ```
 
 ---
@@ -121,9 +121,28 @@ spark.sql.autoBroadcastJoinThreshold=67108864 # 64 MB broadcast join threshold
 
 1. Set `spark.sql.adaptive.enabled=true` by default on all Dataproc Spark workloads.
 2. If PySpark tasks crash with YARN container memory violations, increase `spark.executor.memoryOverhead` rather than just `spark.executor.memory`.
-3. Broadcast small lookup tables under 64 MB (`broadcast(dim_df)`) to replace expensive distributed shuffle hash joins with local in-memory hash joins.
+3. Broadcast a lookup only after checking decoded size, driver/executor memory and join semantics. A 64 MiB serialized input is not a universal safe memory limit.
 
 ---
+
+## Measure before changing memory
+
+Spark evaluates transformations lazily. A `select`, filter or join builds a plan; an action such as a write or count triggers execution. Use `explain("formatted")` and the Spark UI to locate scans, exchanges and join strategies. Cache only reused work, and unpersist it when finished. Caching every intermediate can increase pressure without improving runtime.
+
+If a 32 GiB worker has two executors configured with 10 GiB heap plus 3 GiB overhead each, they reserve roughly 26 GiB before other runtime/OS needs. Python workers, Arrow buffers, native libraries and shuffle all matter. Increasing heap while leaving the same container/node limit can make the process exceed its memory budget. A driver failure caused by `collect()` is a different problem from executor skew.
+
+For a 100 GiB shuffle with 200 partitions, the average is about 512 MiB per partition. If one key owns half the rows, the average hides a roughly 50 GiB hot partition. AQE can help supported skewed joins, but ordinary hash repartitioning by the same hot key cannot split its logical group.
+
+The salting example expands every dimension key to ten variants. That is a cost, and it preserves joins only if matching keys/types and dimension grain are correct. Null join keys need an explicit policy. For replay-sensitive transforms, derive salts from a stable event identifier rather than depending on random assignment.
+
+## Exercise with a useful correctness check
+
+Build a local fixture with one hot customer and a unique lookup table. Compare an ordinary join, an eligible broadcast join and a correctly salted join. Assert identical row counts and total integer amounts before comparing shuffle bytes or runtime. Then duplicate a lookup key. All three can multiply revenue; performance tuning does not fix the data model.
+
+??? note "Recall answer"
+    `coalesce` reduces partitions without a general redistribution and can preserve skew. `repartition` redistributes, but hashing the same hot grouping key still sends it together. Use the query's semantics to decide whether salting or partial aggregation is valid.
+
+Sources: [Spark SQL tuning](https://spark.apache.org/docs/3.5.6/sql-performance-tuning.html), [memory tuning](https://spark.apache.org/docs/3.5.6/tuning.html), and [monitoring](https://spark.apache.org/docs/3.5.6/monitoring.html).
 
 | Previous Lesson | Curriculum | Next Lesson |
 | :--- | :---: | ---: |

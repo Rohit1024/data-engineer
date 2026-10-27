@@ -2,122 +2,81 @@
 icon: lucide/cpu
 ---
 
-# BigQuery internal architecture: Dremel, Capacitor, Colossus, and Jupiter
+# BigQuery internals and reading an execution plan
 
-BigQuery executes queries across petabytes of data in seconds by decoupling compute from storage through Google's internal infrastructure components: Dremel (the compute execution engine), Capacitor (the columnar file format), Colossus (the distributed file system), and Jupiter (the petabit bisection-bandwidth network).
+Explain why selecting fewer columns, reducing join fan-out and removing skew can improve a query. Internal component names are useful only when they support those decisions.
 
----
+## Separate the public contract from the architecture model
 
-## The four core internal systems
+Dremel describes distributed analytical execution. Capacitor is BigQuery's native columnar storage format, Colossus is Google's distributed storage system, and Jupiter provides data-center networking. These explain how compute can operate separately from storage. They do not expose fixed leaf/mixer counts, per-slot memory settings or guaranteed network bandwidth to users.
 
-``` mermaid
+```mermaid
 flowchart TD
-    subgraph DremelCompute["Dremel Compute Engine"]
-        Root["Root Server (Coordinator)"]
-        Mixer1["Mixer Tier 1"]
-        Mixer2["Mixer Tier 2"]
-        Leaf1["Leaf Slot Worker 1"]
-        Leaf2["Leaf Slot Worker 2"]
-        Leaf3["Leaf Slot Worker 3"]
-        Leaf4["Leaf Slot Worker 4"]
-
-        Root --> Mixer1
-        Root --> Mixer2
-        Mixer1 --> Leaf1
-        Mixer1 --> Leaf2
-        Mixer2 --> Leaf3
-        Mixer2 --> Leaf4
-    end
-
-    subgraph Network["Jupiter Network Fabric (Petabit Network)"]
-        Jup["In-Memory Distributed Shuffle & Data Routing"]
-    end
-
-    subgraph ColossusStorage["Colossus Distributed Storage"]
-        C1["Capacitor Shard A"]
-        C2["Capacitor Shard B"]
-        C3["Capacitor Shard C"]
-    end
-
-    DremelCompute <--> Network
-    Network <--> ColossusStorage
+    A["SQL request, location and job configuration"] --> B["Parse, authorize and optimize"]
+    B --> C["Read selected columns and pruned partitions/blocks"]
+    C --> D["Parallel stages: filters and partial aggregates"]
+    D --> E["Shuffle intermediate rows by join or grouping key"]
+    E --> F["Join, aggregate and produce output"]
+    F --> G["Job statistics and execution graph"]
 ```
 
----
+Columnar storage avoids reading unrelated columns. Nested/repeated fields can represent related data without a separate distributed join. A shuffle moves rows between parallel workers so equal keys meet. When one key dominates, one part of the stage can take much longer. Shuffle can spill; it is not a promise that every intermediate byte always remains in RAM.
 
-## 1. Dremel: Dynamic execution tree
+A slot is a virtual unit of analytical compute. A slot-second measures resource consumption, not billed dollars for every pricing model. A query can use varying numbers of slots over its execution. More slots cannot repair an incorrect many-to-many join.
 
-When you submit a SQL query, BigQuery allocates a dynamic tree of workers called **slots** (a virtual CPU plus memory unit):
-1. **Root server**: Parses SQL, expands views, optimizes the execution plan, and acts as the top-level aggregator.
-2. **Mixers**: Intermediate aggregation nodes that merge partial results from lower tiers and coordinate distributed shuffle operations.
-3. **Leaf slots**: Read columnar chunks directly from Colossus over the Jupiter network, apply predicate filters, evaluate projection expressions, and emit intermediate records.
+## Worked join example
 
----
+An orders table has 1 million rows. A customer dimension accidentally contains 10 rows for each customer. Joining on customer ID produces up to 10 million rows and inflates revenue tenfold. The solution is to establish the intended dimension grain and a valid current/as-of join, not simply increase the reservation.
 
-## 2. Capacitor: Columnar storage format
-
-BigQuery stores native tables in Capacitor, an evolution of Apache Parquet and ORC formats.
-- **Nested and repeated structures**: Capacitor represents hierarchical data using record shredding and reconstruction algorithms without flattening or data duplication.
-- **Encoding and dictionary compression**: Columns are encoded based on data distribution (Run-Length Encoding, Bit-vector encoding, Frame-of-Reference, and Dictionary Encoding).
-- **Embedded statistics**: File headers store exact min/max bounds and null counts per column per row group, enabling Dremel to skip irrelevant blocks before reading bytes off disk.
-
----
-
-## 3. Colossus and Jupiter: Decoupled storage and shuffle
-
-Traditional data warehouses co-locate CPU and disks on the same physical nodes. When a node fails or queries scale, data must be rebalanced across disks.
-
-BigQuery separates compute and storage:
-- **Colossus**: Handles multi-zone replication, automated disk repair, and snapshot isolation.
-- **Jupiter network**: Delivers more than 1 Petabit per second of bisection bandwidth, allowing compute slots to read from Colossus at line-rate.
-- **In-memory shuffle**: Joins and `GROUP BY` operations shuffle intermediate hash partitions across slots in RAM via Jupiter, avoiding slow disk writes.
-
----
-
-## Inspecting execution stages with INFORMATION_SCHEMA
-
-Inspect query plan stages, slot utilization, and shuffle bytes using `INFORMATION_SCHEMA.JOBS_BY_PROJECT`:
+Use this self-contained query to see the problem:
 
 ```sql
-SELECT
-  job_id,
-  user_email,
-  total_bytes_billed / (1024 * 1024 * 1024) AS gigabytes_billed,
-  total_slot_ms / (1000 * 60) AS slot_minutes_consumed,
-  total_slot_ms / NULLIF(TIMESTAMP_DIFF(end_time, start_time, MILLISECOND), 0) AS average_slots_used,
-  query
-FROM `region-us`.INFORMATION_SCHEMA.JOBS_BY_PROJECT
-WHERE creation_time > TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 1 DAY)
+WITH orders AS (
+  SELECT 101 AS order_id, 'c1' AS customer_id, 2500 AS cents
+), customers AS (
+  SELECT 'c1' AS customer_id, 'basic' AS tier UNION ALL
+  SELECT 'c1', 'premium'
+)
+SELECT COUNT(*) AS joined_rows, SUM(cents) AS cents
+FROM orders JOIN customers USING (customer_id);
+```
+
+Expect two joined rows and 5000 cents, although the input order was worth 2500. [Lesson 0041](0041-googlesql-data-modeling.md) shows how grain and validity intervals prevent this.
+
+## Measure a real query
+
+Run the following in the job's actual location. This example uses `us-central1` and needs permission to inspect project jobs.
+
+```sql
+SELECT job_id, state, error_result,
+       total_bytes_processed, total_slot_ms,
+       TIMESTAMP_DIFF(start_time, creation_time, MILLISECOND) AS queue_ms,
+       SAFE_DIVIDE(total_slot_ms,
+         TIMESTAMP_DIFF(end_time, start_time, MILLISECOND)) AS average_slots
+FROM `region-us-central1`.INFORMATION_SCHEMA.JOBS_BY_PROJECT
+WHERE creation_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 1 DAY)
   AND job_type = 'QUERY'
+  AND (statement_type IS NULL OR statement_type != 'SCRIPT')
 ORDER BY total_slot_ms DESC
 LIMIT 10;
 ```
 
----
+If a completed query uses 600,000 slot-ms over 10,000 milliseconds, average usage is 60 slots. That number alone does not prove efficient parallelism; repeated work and excessive shuffle also consume slots. Inspect the graph's input/output rows, shuffle volume, spill and skew. Queue delay, execution duration and data freshness are different measures.
 
-## Query execution stages inside the BigQuery console
+Compare two versions of a query with result caching disabled and the same input snapshot. Change one thing, such as moving an aggregation before a join, and confirm both result equality and reduced work. A faster query returning the wrong grain is a regression.
 
-When you inspect a query execution graph in the console or API:
-- **Input (S00)**: Leaf workers read from Colossus and filter rows.
-- **Shuffle (S01)**: Intermediate workers repartition data across hash keys in memory.
-- **Output (S02)**: Mixers perform final aggregations, sorting, and return results to the root node.
+## Recall and practical challenge
 
-``` mermaid
-flowchart TD
-    S00["Stage 0: Read from Colossus & Filter (Leaf Slots)"] --> Shuffle["In-Memory Shuffle (Jupiter)"]
-    Shuffle --> S01["Stage 1: Partial Aggregation & Join (Mixers)"]
-    S01 --> S02["Stage 2: Final Order By & Limit (Root)"]
-```
+1. A query reads few bytes but consumes many slot-seconds. Name two explanations.
+2. Does `LIMIT 10` necessarily reduce a full table scan?
+3. Why should script-parent and child jobs not both be summed for cost attribution?
 
----
+??? note "Answers"
+    1. Expensive expressions, joins, sorting or skew can require substantial compute after reading.
+    2. No. Projection and partition/block pruning determine scanned data; LIMIT is not a general scan cap.
+    3. Parent totals can already include child work, so the sum double-counts it.
 
-## Summary heuristics
-
-1. Queries scan only the specific columns referenced in the `SELECT`, `WHERE`, and `JOIN` clauses due to Capacitor columnar storage. Avoid `SELECT *`.
-2. Compute slots scale dynamically per query. A query running against 100 TB can scale to thousands of leaf slots for seconds, then drop to zero.
-3. High `total_slot_ms` relative to elapsed wall-clock time indicates effective parallelization across many Dremel slots.
-
----
+Sources: [query-plan explanation](https://docs.cloud.google.com/bigquery/docs/query-plan-explanation), [compute optimization](https://docs.cloud.google.com/bigquery/docs/best-practices-performance-compute), and [JOBS metadata](https://docs.cloud.google.com/bigquery/docs/information-schema-jobs).
 
 | Previous Lesson | Curriculum | Next Lesson |
 | :--- | :---: | ---: |

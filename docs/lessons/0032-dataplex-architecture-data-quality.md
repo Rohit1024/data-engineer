@@ -2,116 +2,75 @@
 icon: lucide/shield
 ---
 
-# Dataplex architecture: Lakes, zones, assets, and data quality tasks
+# Data governance catalog, discovery and data quality scans
 
-Google Cloud Dataplex is an intelligent data fabric management platform. It allows organizations to centrally discover, manage, monitor, and govern distributed data assets stored across Cloud Storage buckets and BigQuery datasets without moving data.
+Google's catalog naming has changed. Knowledge Catalog is the current name for the service formerly called Dataplex Universal Catalog. Existing `dataplex` APIs and configurations remain relevant. Older lake/zone/asset organization and current catalog entries/aspects are distinct concepts; do not treat Data Catalog discovery as today's universal workflow. See the [transition guide](https://docs.cloud.google.com/knowledge-catalog/docs/transition-dataplex-universal-catalog).
 
----
+## Governance adds context; access control still enforces permission
 
-## Dataplex organizational hierarchy
-
-``` mermaid
+```mermaid
 flowchart TD
-    Org["Google Cloud Organization"] --> Lake["Dataplex Lake: 'finance_analytics_lake'"]
-    Lake --> RawZone["Raw Data Zone (Landing & Ingestion Storage)"]
-    Lake --> CuratedZone["Curated Data Zone (Cleaned & Conformed)"]
-
-    RawZone --> Asset1["Asset 1: gs://lake-bronze-finance/"]
-    RawZone --> Asset2["Asset 2: BigQuery Dataset 'raw_transactions'"]
-
-    CuratedZone --> Asset3["Asset 3: BigQuery Dataset 'gold_financial_marts'"]
-    CuratedZone --> Asset4["Asset 4: gs://lake-silver-finance/ (Parquet)"]
+    A["BigQuery tables and Cloud Storage data"] --> B["Supported discovery or catalog ingestion"]
+    B --> C["Entries, schema, ownership and business metadata"]
+    A --> D["Data quality scan with explicit rules and boundary"]
+    D --> E["Rule results, failed-row evidence and monitoring"]
+    C --> F["Find data and understand suitability"]
+    E --> F
+    F --> G["IAM, row/column policies and publication gates enforce use"]
 ```
 
-1. **Lake**: A logical container representing a business domain or data domain (e.g. Sales, Marketing, Supply Chain).
-2. **Zone**: Categorizes data within a lake by readiness or security tier:
-   - **Raw zone**: Unstructured or semi-structured data with loose formatting rules.
-   - **Curated zone**: Uniform, schema-enforced, and conformed data ready for analytical consumption.
-3. **Asset**: Binds an underlying physical Cloud Storage bucket or BigQuery dataset into the zone.
+A catalog entry describes an asset. Aspects attach structured metadata, such as ownership or classification. Discovery can infer technical metadata but cannot decide whether revenue includes tax or whether an order ID is globally unique. Assign an owner, grain, source boundary, freshness requirement and retention policy explicitly.
 
----
+Where an existing design uses lakes, zones and assets, a lake groups resources and zones organize readiness. That hierarchy does not move data or automatically establish every row/column policy. Governance is not complete because an asset appears in search.
 
-## Automated metadata discovery and cataloging
+## Create a quality scan with valid rule types
 
-When you attach an asset to a Dataplex zone, Dataplex runs discovery jobs that:
-- Scan GCS buckets for Parquet, Avro, ORC, CSV, and JSON files.
-- Infer schemas and partition layouts automatically.
-- Register external tables in the central Data Catalog and BigQuery metastore.
-
----
-
-## Dataplex Auto Data Quality (AutoDQ)
-
-Dataplex AutoDQ runs serverless data quality validation rules defined in YAML against BigQuery tables, logging test results directly to Cloud Monitoring and BigQuery.
-
-### AutoDQ rule specification
-
-Save as `data_quality_rules.yaml`:
+Prerequisites: an existing BigQuery table with `order_id`, `customer_id`, `order_amount`, appropriate scan service-account permissions, and same-location compatibility. Save the following as `orders_quality.yaml`:
 
 ```yaml
-metadata:
-  table: projects/my-gcp-project/datasets/analytics_mart/tables/fact_order_events
-
-ruleDimensions:
-  - completeness
-  - validity
-  - uniqueness
-
 rules:
-  - dimension: uniqueness
-    name: unique_order_id
-    table: fact_order_events
-    column: order_id
-    unique: true
-
-  - dimension: completeness
-    name: non_null_customer
-    table: fact_order_events
-    column: customer_id
-    nonNull: true
-
-  - dimension: validity
-    name: positive_order_amount
-    table: fact_order_events
-    column: order_amount
+  - column: order_id
+    dimension: UNIQUENESS
+    threshold: 1
+    uniquenessExpectation: {}
+  - column: customer_id
+    dimension: COMPLETENESS
+    threshold: 1
+    nonNullExpectation: {}
+  - column: order_amount
+    dimension: VALIDITY
+    threshold: 1
     rangeExpectation:
-      minValue: 0.01
-
-  - dimension: validity
-    name: valid_order_status
-    table: fact_order_events
-    column: order_status
-    setExpectation:
-      values:
-        - "PENDING"
-        - "COMPLETED"
-        - "CANCELLED"
-        - "REFUNDED"
+      minValue: "0"
+      strictMinEnabled: true
 ```
-
-### Running the Data Quality scan with gcloud
 
 ```bash
-# 1. Create the data quality scan task
-gcloud dataplex datascans create data-quality orders-dq-scan \
-    --location=us-central1 \
-    --data-source-table="projects/my-gcp-project/datasets/analytics_mart/tables/fact_order_events" \
-    --data-quality-spec-file="data_quality_rules.yaml"
-
-# 2. Run the scan immediately
-gcloud dataplex datascans run orders-dq-scan \
-    --location=us-central1
+gcloud dataplex datascans create data-quality orders-quality \
+  --project="$PROJECT_ID" --location=us-central1 \
+  --data-source-resource="//bigquery.googleapis.com/projects/${PROJECT_ID}/datasets/analytics_mart/tables/orders" \
+  --data-quality-spec-file=orders_quality.yaml
+gcloud dataplex datascans run orders-quality --location=us-central1
 ```
 
----
+These rules require unique order IDs, non-null customers and positive amounts. They use `uniquenessExpectation` and `nonNullExpectation`, not invented `unique: true` or `nonNull: true` scan fields. `threshold: 1` means the required passing fraction is 100 percent. Inspect the resulting job and per-rule outcomes; successful scan execution does not itself mean all rules passed. See [quality scans](https://docs.cloud.google.com/knowledge-catalog/docs/use-auto-data-quality) and the [CLI reference](https://docs.cloud.google.com/sdk/gcloud/reference/dataplex/datascans/create/data-quality).
 
-## Summary heuristics
+## A sampling example explains the limit
 
-1. Structure Dataplex lakes by domain (e.g. Sales, Logistics) rather than by environment, creating Raw and Curated zones within each domain lake.
-2. Use Dataplex AutoDQ YAML rules for automated, scheduled data quality checks instead of maintaining custom query scripts.
-3. Leverage Dataplex discovery to automatically register Hive-partitioned GCS files as external BigLake tables without manual DDL maintenance.
+Suppose one duplicate exists among 10 million rows. A small sample can miss it. A passing sampled uniqueness rule is evidence about that sample, not a proof of global primary-key integrity. Choose full scans or targeted complete partitions where correctness requires them. Incremental scans also need a stable incremental field and a policy for late updates; a newly arriving row can have an old business timestamp.
 
----
+Separate quality dimensions. Non-null checks measure completeness, allowed-value checks measure validity, unique-key checks measure uniqueness, and same-boundary source reconciliation measures consistency/completeness across systems. A row can pass every local rule yet represent a missing shipment because its upstream counterpart never arrived.
+
+## Gate publication explicitly
+
+Schedule scans at an agreed source boundary and export/retain result evidence. A quality scan does not automatically stop Dataform, Airflow or a dashboard refresh. Have the orchestrator inspect required rule outcomes before switching the published result. Keep failed-row evidence in a restricted destination; it can contain sensitive values.
+
+## Exercise and expected results
+
+Create a sandbox fixture with two unique positive orders, run the full scan and record passing results. Add a duplicate ID, a null customer and a negative amount, then predict which rules fail. Verify that the prior published output remains available when the new scan fails. Remove the dedicated scan and fixture after inspection.
+
+??? note "Recall answer"
+    Catalog metadata explains what data means. Scans measure selected quality conditions. IAM and data policies authorize access. Publication logic decides when consumers receive a newly validated result. None automatically substitutes for all the others.
 
 | Previous Lesson | Curriculum | Next Lesson |
 | :--- | :---: | ---: |

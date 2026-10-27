@@ -2,122 +2,67 @@
 icon: lucide/git-commit
 ---
 
-# Cloud Pub/Sub Lite vs Standard: Cost and latency trade-offs
+# Pub/Sub Lite retirement and choosing a migration target
 
-Google Cloud offers two messaging systems: Pub/Sub Standard and Pub/Sub Lite. Standard is a global, fully managed serverless messaging service with automated scaling. Lite is a zonal or regional partition-based service designed for high-volume, cost-sensitive workloads similar to Apache Kafka.
+!!! warning "Service lifecycle checked on 2026-10-28"
+    Pub/Sub Lite is deprecated. Google lists January 31, 2027 as its shutdown date and has already closed new-customer access. This lesson covers migration, not new Lite deployment. See the [official notice](https://docs.cloud.google.com/pubsub/docs/pubsub-lite-documentation).
 
----
+The original lesson recommended Lite for new high-volume systems. That recommendation is no longer appropriate. The useful concepts are partitioned logs, cursor migration and capacity-based versus volume-based cost.
 
-## Architectural differences
+## Compare the delivery models
 
-Pub/Sub Standard automatically shards traffic behind a single endpoint. Pub/Sub Lite requires you to pre-provision topic partitions and reserve ingress/egress bandwidth in MiB/s.
+| Concept | Existing Lite system | Pub/Sub target | Managed Kafka target |
+| --- | --- | --- | --- |
+| Work distribution | Explicit partitions and cursors | Subscriptions, acknowledgements and optional ordering keys | Partitions, consumer groups and offsets |
+| Capacity | Provisioned throughput and storage | Managed scaling with quotas | Provisioned cluster capacity |
+| Client migration | Existing Lite client or shim | Adopt Pub/Sub client and acknowledgement model | Validate Kafka protocol/client compatibility |
+| Replay | Retained partition log and cursors | Configured retention, seek and snapshots | Retention and consumer-offset control |
 
-``` mermaid
+Do not assume a Lite cursor translates to a Pub/Sub acknowledgement or Kafka offset. They refer to different logs. Business event IDs, source sequence numbers and recorded cutoffs connect the old and new systems.
+
+```mermaid
 flowchart TD
-    subgraph PubSubStandard["Pub/Sub Standard (Global & Serverless)"]
-        StdPub["Publishers"] --> GlobalEndpoint["Global Endpoint (Auto-sharded)"]
-        GlobalEndpoint --> DynPart["Dynamic Shards (Managed by GCP)"]
-        DynPart --> StdSub["Subscribers (Individual message acks)"]
-    end
-
-    subgraph PubSubLite["Pub/Sub Lite (Zonal / Regional Partitioned)"]
-        LitePub["Publishers (Partition Routing)"] --> P0["Partition 0 (4 MiB/s Ingress)"]
-        LitePub --> P1["Partition 1 (4 MiB/s Ingress)"]
-        P0 --> LiteSub0["Consumer Group 0 (Offset cursor tracking)"]
-        P1 --> LiteSub1["Consumer Group 1 (Offset cursor tracking)"]
-    end
-
-    PubSubStandard ~~~ PubSubLite
+    A["Inventory Lite partitions, cursors and retention"] --> B["Choose Pub/Sub or Managed Kafka from required semantics"]
+    B --> C["Publish identifiable events to the migration target"]
+    C --> D["Run shadow consumers into isolated outputs"]
+    D --> E["Compare identities, values, order and lag at a cutoff"]
+    E --> F["Switch one coordinated publication path"]
+    F --> G["Drain old backlog and retain rollback evidence"]
 ```
 
----
+Pub/Sub is a reasonable starting choice for managed messaging and Google Cloud export subscriptions. Kafka is worth evaluating when existing applications rely on its partition/offset APIs and ecosystem. Validate the target's supported security, connectors and operating limits; API familiarity alone is not sufficient. See the [messaging-model comparison and retirement notice](https://docs.cloud.google.com/pubsub/docs/choosing-pubsub-or-lite) and [Managed Kafka overview](https://docs.cloud.google.com/managed-service-for-apache-kafka/docs/overview).
 
-## Feature and cost comparison
+## Work through a cutover
 
-| Dimension | Pub/Sub Standard | Pub/Sub Lite |
-| :--- | :--- | :--- |
-| **Architecture** | Global, serverless, automated routing | Zonal or Regional, pre-partitioned |
-| **Capacity management** | Automatic scaling up and down | Manual provisioning (MiB/s per partition) |
-| **Pricing basis** | Data volume processed ($40 per TB) | Capacity reserved ($4.50 per MiB/s-month) + storage |
-| **Message ordering** | Optional via ordering keys | Strict per partition |
-| **Acknowledgement mechanism** | Individual message acknowledgment | Offset-based cursor commits (Kafka-style) |
-| **Max message size** | 10 MB | 256 MB |
-| **Cross-cloud replication** | Native multi-region | Zonal or Regional replication |
-| **Kafka connector compatibility** | Via Kafka Connect Sink/Source | Drop-in Kafka Shim client library |
+Suppose one producer emits versions 1 through 10,000 for an entity. At the cutover, Lite has processed version 9,950 while the new system has processed 9,980. Adding the two row counts does not prove coverage. The systems overlap, and some missing versions may be hidden by duplicates.
 
----
+Record an agreed boundary, compare event identities and payloads, and advance the consumer only after it can account for all required versions. Dual publishing is not atomic across two services. If the first publish succeeds and the second fails, a producer needs a retry/outbox strategy rather than assuming both logs contain the same records. Use version-aware current-state writes and retain delete tombstones to tolerate overlap.
 
-## Cost inflection point
+## Local reconciliation example
 
-Pub/Sub Lite is approximately 80% to 90% cheaper than Pub/Sub Standard at sustained high throughput because you pay for provisioned capacity rather than raw message volume.
-
-If a pipeline streams 50 MB/s continuously (130 TB/month):
-- **Pub/Sub Standard**: 130 TB * $40/TB = **$5,200/month**.
-- **Pub/Sub Lite**: 50 MB/s provisioned ingress + egress + 3 days storage = **~$580/month**.
-
-If your traffic is unpredictable with long quiet periods and sudden bursts, Pub/Sub Standard avoids paying for idle reserved capacity.
-
----
-
-## Hands-on exercise: Creating a Pub/Sub Lite topic and subscription
-
-Create a regional topic with 4 partitions, 8 MiB/s total publish bandwidth, and 7-day retention:
-
-```bash
-# 1. Create a 4-partition regional Pub/Sub Lite topic
-gcloud pubsub lite-topics create high-throughput-telemetry \
-    --location=us-central1 \
-    --partitions=4 \
-    --per-partition-publish-capacity=2MiB \
-    --per-partition-subscribe-capacity=4MiB \
-    --per-partition-retention-period=7d \
-    --per-partition-retention-storage=100GiB
-
-# 2. Create a Lite subscription with commit cursor delivery
-gcloud pubsub lite-subscriptions create telemetry-dataflow-sub \
-    --location=us-central1 \
-    --topic=high-throughput-telemetry \
-    --delivery-requirement=deliver-after-stored
-
-# 3. Inspect provisioned throughput
-gcloud pubsub lite-topics describe high-throughput-telemetry \
-    --location=us-central1 \
-    --format="yaml(name, partitionConfig, retentionConfig)"
+```python
+old_seen = {f"e{i}" for i in range(1, 101)}
+new_seen = {f"e{i}" for i in range(50, 106)}
+expected_at_cutoff = {f"e{i}" for i in range(1, 101)}
+missing_in_new = expected_at_cutoff - new_seen
+ahead_of_cutoff = new_seen - expected_at_cutoff
+assert len(missing_in_new) == 49
+assert len(ahead_of_cutoff) == 5
+print(len(missing_in_new), len(ahead_of_cutoff))
 ```
 
----
+Expect `49 5`. The new system being ahead for some events does not mean its historical range is complete. Real reconciliation also compares payloads, multiplicity and per-entity ordering, as in [lesson 0040](0040-bigquery-failed-job-recovery-backfill.md).
 
-## Kafka shim integration
+## Estimate total cost without a magic threshold
 
-Pub/Sub Lite includes a Kafka client library that lets existing Kafka applications write to and read from Lite without changing application code:
+For a hypothetical 50 MiB/s stream over 30 days, ingress is `50 × 60 × 60 × 24 × 30 = 129,600,000 MiB`. Add each subscription's delivery volume, retention, replication, network transfer and processing. Compare that with provisioned Kafka capacity, disk, idle headroom and operating effort. Use current regional pricing. A historical claim that Lite is always 80–90% cheaper cannot choose today's target.
 
-```xml
-<!-- Maven dependency for Kafka shim -->
-<dependency>
-  <groupId>com.google.cloud</groupId>
-  <artifactId>google-cloud-pubsublite-kafka</artifactId>
-  <version>1.1.0</version>
-</dependency>
-```
+## Migration exercise
 
-In your Kafka producer configuration, point to Pub/Sub Lite:
+Design a rollback after the new consumer has processed a delete that the old consumer has not seen. State which log retains that deletion, which identity prevents replay from recreating the entity, and when the old output is safe to retire.
 
-```properties
-bootstrap.servers=us-central1.pubsublite.googleapis.com:443
-key.serializer=org.apache.kafka.common.serialization.StringSerializer
-value.serializer=org.apache.kafka.common.serialization.ByteArraySerializer
-pubsublite.project=my-gcp-project
-pubsublite.topic=high-throughput-telemetry
-```
-
----
-
-## Decision heuristics
-
-1. Choose **Pub/Sub Standard** when you need a serverless setup, global routing, direct BigQuery/GCS subscriptions, or have spiky, low-to-medium volume traffic.
-2. Choose **Pub/Sub Lite** when migrating existing Kafka pipelines, or when continuous streaming volume exceeds 10 MB/s and justifies manual partition management for major cost savings.
-
----
+??? note "Expected reasoning"
+    Preserve the source change and ordering boundary. A retained tombstone/version must reject older updates. Rollback needs reconciled state and a live retained source range, not just the old consumer binary.
 
 | Previous Lesson | Curriculum | Next Lesson |
 | :--- | :---: | ---: |

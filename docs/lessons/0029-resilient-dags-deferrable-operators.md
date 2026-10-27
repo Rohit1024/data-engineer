@@ -2,130 +2,82 @@
 icon: lucide/shield-check
 ---
 
-# Designing resilient DAGs: Google Cloud operators and deferrable execution
+# Resilient Airflow DAGs: intervals, retries and deferrable tasks
 
-Building production data pipelines in Apache Airflow requires writing resilient DAGs that handle transient network drops, avoid blocking worker slots during long-running cloud jobs, and eliminate top-level code execution anti-patterns.
+Retry safety comes from stable inputs and deliberate external writes. A task retry can run its code again after the remote operation already committed.
 
----
+## Separate execution from waiting
 
-## Deferrable operators and the Triggerer process
-
-Standard Airflow operators consume a continuous Celery worker slot while waiting for a remote BigQuery or Dataflow job to finish. **Deferrable operators** release the worker slot immediately after submitting the job, handing off monitoring to the lightweight Airflow Triggerer process.
-
-``` mermaid
+```mermaid
 flowchart TD
-    subgraph StandardOperator["Standard Blocking Operator"]
-        Worker1["Celery Worker Pod (1 Slot)"] --> Submit1["Submit BigQuery Job"]
-        Submit1 --> Block["Blocked in time.sleep() (Consumes 100% of 1 Worker Slot for 45 mins)"]
-        Block --> Done1["Job Finished"]
-    end
-
-    subgraph DeferrableOperator["Deferrable Operator (deferrable=True)"]
-        Worker2["Celery Worker Pod"] --> Submit2["Submit BigQuery Job"]
-        Submit2 --> Yield["Yield TriggerEvent & Release Worker Slot"]
-        Yield --> Triggerer["Airflow Triggerer (Monitors 1,000+ jobs on 1 async thread)"]
-        Triggerer -->|"Job Finished Event"| Resume["Resume Worker (Post-processing)"]
-    end
-
-    StandardOperator ~~~ DeferrableOperator
+    A["Worker submits external job"] --> B["Record project, location and job ID"]
+    B --> C["Operator defers and releases worker slot"]
+    C --> D["Triggerer monitors supported asynchronous condition"]
+    D --> E["Worker resumes and checks completion"]
+    E --> F["Validate output and release downstream tasks"]
 ```
 
----
+A rescheduling sensor repeatedly becomes runnable to check a condition. A deferrable operator delegates waiting to a triggerer and later resumes on a worker. Use only operator versions that support the selected mode. Adding `deferrable=True` to an arbitrary class is not a compatibility check. Deferral frees a worker slot; it does not mean a blocked task was previously consuming an entire CPU.
 
-## Eliminating top-level code anti-patterns
+## A runnable local DAG fixture
 
-The Airflow Scheduler parses every Python file in the `dags/` folder every 30 seconds:
-- **Anti-pattern**: Running SQL queries, `Variable.get()`, or `gcloud` requests at the root level of a Python file. This forces the scheduler to make dozens of network calls every 30 seconds, causing scheduler heartbeats to freeze.
-- **Best practice**: Keep the global scope strictly declarative. Wrap all API connections and data access inside operator `execute()` methods or Python callables.
-
----
-
-## Complete resilient Airflow DAG implementation
-
-Save as `dags/ecommerce_daily_mart.py`:
+This Airflow 2.11-style DAG demonstrates a deterministic input and failure classification. Save as `dags/resilient_fixture.py`, then parse/run it in the matching environment from lesson 0039.
 
 ```python
-from datetime import datetime, timedelta
-from airflow import DAG
-from airflow.providers.google.cloud.operators.bigquery import (
-    BigQueryInsertJobOperator,
-    BigQueryCheckOperator
-)
-from airflow.providers.google.cloud.operators.dataproc import DataprocSubmitJobOperator
-from airflow.operators.empty import EmptyOperator
+from datetime import timedelta
+import pendulum
+from airflow.decorators import dag, task
+from airflow.exceptions import AirflowFailException
 
-default_args = {
-    "owner": "data-platform",
-    "depends_on_past": False,
-    "retries": 3,
-    "retry_delay": timedelta(minutes=2),
-    "retry_exponential_backoff": True,
-    "max_retry_delay": timedelta(minutes=15)
-}
-
-with DAG(
-    dag_id="ecommerce_daily_mart_pipeline",
-    default_args=default_args,
-    description="Daily resilient ELT pipeline with deferrable operators",
-    schedule_interval="0 3 * * *", # 03:00 UTC daily
-    start_date=datetime(2026, 1, 1),
-    catchup=False,
+@dag(
+    dag_id="resilient_fixture", schedule=None, catchup=False,
+    start_date=pendulum.datetime(2026, 1, 1, tz="UTC"),
     max_active_runs=1,
-    tags=["production", "ecommerce", "bigquery"]
-) as dag:
+    default_args={"retries": 2, "retry_delay": timedelta(minutes=1),
+                  "retry_exponential_backoff": True,
+                  "execution_timeout": timedelta(minutes=5)},
+)
+def fixture():
+    @task
+    def validate():
+        cents = [2500, 4200]
+        if any(value < 0 for value in cents):
+            raise AirflowFailException("Invalid immutable source amount")
+        return sum(cents)
 
-    start = EmptyOperator(task_id="start")
+    @task
+    def verify(total):
+        if total != 6700:
+            raise AirflowFailException("Reconciliation failed")
 
-    # 1. Transform Bronze to Silver using Deferrable BigQuery job
-    run_silver_transformation = BigQueryInsertJobOperator(
-        task_id="run_silver_transformation",
-        configuration={
-            "query": {
-                "query": """
-                  MERGE `my-proj.silver.orders` T
-                  USING (
-                    SELECT * FROM `my-proj.bronze.orders_raw`
-                    WHERE DATE(event_timestamp) = '{{ ds }}'
-                  ) S
-                  ON T.order_id = S.order_id
-                  WHEN MATCHED THEN UPDATE SET
-                    T.amount = S.amount,
-                    T.status = S.status,
-                    T.updated_at = CURRENT_TIMESTAMP()
-                  WHEN NOT MATCHED THEN INSERT ROW;
-                """,
-                "useLegacySql": False
-            }
-        },
-        deferrable=True # Releases Celery worker slot while query executes
-    )
+    verify(validate())
 
-    # 2. Data quality check
-    verify_record_count = BigQueryCheckOperator(
-        task_id="verify_record_count",
-        sql="""
-          SELECT COUNT(1) > 0
-          FROM `my-proj.silver.orders`
-          WHERE DATE(updated_at) = '{{ ds }}'
-        """,
-        use_legacy_sql=False
-    )
-
-    end = EmptyOperator(task_id="end")
-
-    start >> run_silver_transformation >> verify_record_count >> end
+fixture()
 ```
 
----
+Expect success with total 6700. Introduce a negative value and expect validation to fail without spending retries on an immutable invalid payload. Transient I/O exceptions in a real task can use retries/backoff. Distinguish data errors from service outages instead of retrying every failure until it disappears.
 
-## Summary heuristics
+## Apply this to warehouse publication
 
-1. Set `deferrable=True` on all Google Cloud operators (`BigQueryInsertJobOperator`, `DataprocSubmitJobOperator`, `DataflowCreateJavaJobOperator`) to avoid worker slot starvation.
-2. Configure `retries=3` with `retry_exponential_backoff=True` on every production DAG to automatically absorb intermittent network blips.
-3. Keep DAG files free of top-level network I/O and dynamic variable lookups to protect scheduler stability.
+For a scheduled daily DAG, read `data_interval_start` and `data_interval_end`. Use a half-open interval to select the intended business data. Wall-clock `CURRENT_DATE()` can process a different day on retry. `{{ ds }}` alone also does not express the end of every custom interval.
 
----
+Use the [complete deferrable BigQuery DAG](0039-managed-airflow-environments-dags.md#6-dag-2-wait-load-validate-and-publish-to-bigquery). It replaces a day-specific staging input, validates uniqueness and values, then transactionally replaces one reporting day. The resulting data is repeatable even when a retry submits a new query job. An unsafe append is still unsafe with exponential backoff.
+
+For stable job IDs, inspect the installed provider's `force_rerun` and reattachment behavior. Retrieving a running job differs from discovering an already completed job after a lost response. A task's failed state is not proof that its external write failed. See [BigQuery operators](https://airflow.apache.org/docs/apache-airflow-providers-google/stable/operators/cloud/bigquery.html).
+
+## Bound concurrency and failure visibility
+
+Pools limit access to constrained destinations. `max_active_runs` limits this DAG's overlap; it does not stop a second DAG writing the same table. Task timeouts, sensor timeouts and external-job cancellation are distinct. Verify whether the selected operator cancels remote work when the task dies.
+
+Keep network calls, source discovery and `Variable.get()` lookups out of repeated top-level parsing where possible. Use runtime task code and supported templating. Define cleanup independently from publication: a final successful `all_done` leaf can otherwise hide failed upstream work in the DAG-run status. See [Airflow best practices](https://airflow.apache.org/docs/apache-airflow/2.11.0/best-practices.html).
+
+## Failure drill
+
+In a disposable warehouse DAG, stop a worker after job submission. Before retry, retrieve the external job and inspect its destination. Explain how your implementation avoids duplicate business rows whether the job was running, successful or definitively failed. Confirm downstream publication remains blocked on failed quality checks.
+
+??? note "Expected reasoning"
+    Preserve job identity, immutable interval inputs and output scope. Reattach or reconcile ambiguous work. Start a new deliberate attempt only when appropriate, and use idempotent replacement/version-aware mutation. Clearing a task is not a rollback.
 
 | Previous Lesson | Curriculum | Next Lesson |
 | :--- | :---: | ---: |
-| [0028: Cloud Composer Architecture](0028-cloud-composer-architecture-gke.md) | [All Lessons (Index)](index.md) | [0030: Dynamic Task Mapping & XComs](0030-dynamic-task-mapping-airflow-best-practices.md) |
+| [0028: Managed Airflow architecture](0028-cloud-composer-architecture-gke.md) | [All Lessons (Index)](index.md) | [0030: Dynamic Task Mapping & XComs](0030-dynamic-task-mapping-airflow-best-practices.md) |

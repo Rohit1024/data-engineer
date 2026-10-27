@@ -28,7 +28,7 @@ flowchart TD
 ```
 
 1. **Partition pruning**: BigQuery eliminates entire partitions during query planning before execution begins. This reduces both scanned bytes (cost on on-demand pricing) and slot consumption.
-2. **Cluster pruning**: Dremel workers check min/max metadata on Capacitor blocks during query execution, skipping unneeded blocks. This reduces slot-milliseconds and wall-clock execution time.
+2. **Cluster pruning**: BigQuery uses clustered-block metadata to skip unneeded blocks. This can reduce processed bytes as well as compute work. A dry run may not predict the full clustered-block reduction before execution.
 
 ---
 
@@ -38,9 +38,9 @@ BigQuery supports three partitioning mechanisms:
 
 | Type | Syntax | Limits | Use case |
 | :--- | :--- | :--- | :--- |
-| **Time-unit column** | `PARTITION BY DATE(created_at)` | Max 10,000 partitions (Daily/Hourly/Monthly/Yearly) | Event timestamps, audit logs, order dates |
-| **Ingestion-time** | `PARTITION BY _PARTITIONDATE` | Max 10,000 partitions | Raw append logs lacking explicit timestamp column |
-| **Integer range** | `PARTITION BY RANGE_BUCKET(org_id, GENERATE_ARRAY(0, 100000, 1000))` | Max 10,000 partitions | Multi-tenant tenant IDs, customer ID shards |
+| **Time-unit column** | `PARTITION BY DATE(created_at)` | Check current partition quotas; daily/hourly/monthly/yearly | Event timestamps, audit logs, order dates |
+| **Ingestion-time** | `PARTITION BY _PARTITIONDATE` | Check current partition quotas | Raw append logs lacking explicit timestamp column |
+| **Integer range** | `PARTITION BY RANGE_BUCKET(org_id, GENERATE_ARRAY(0, 100000, 1000))` | Check current partition quotas | Multi-tenant tenant IDs, customer ID shards |
 
 ---
 
@@ -101,7 +101,7 @@ BigQuery uses an inverted index to pinpoint matching Capacitor blocks, scanning 
 
 ## Verifying query cost and scan reduction
 
-Run an explain query with `dry_run` using Python to verify byte pruning:
+Estimate eligible processed bytes with a Python dry run. This does not execute the query or produce its actual execution graph:
 
 ```python
 from google.cloud import bigquery
@@ -125,11 +125,30 @@ print(f"Bytes to be scanned: {query_job.total_bytes_processed / (1024 * 1024):.2
 
 ## Summary heuristics
 
-1. Always partition on a high-granularity date column (`DATE(timestamp)`) and set `require_partition_filter = true` on tables larger than 100 GB.
-2. Put the most selective filter column first in `CLUSTER BY`.
+1. Choose partition granularity from data volume, retention and common filters. Small tables or tiny daily partitions can be better served by clustering alone. Require a usable partition filter when it protects the workload.
+2. Order clustering columns to match frequent selective filter prefixes. Verify actual scan reduction with representative queries.
 3. Use Search Indexes on log and JSON tables to accelerate point lookups without full string table scans.
 
 ---
+
+## Worked pruning decision
+
+Suppose a 12-month table has 365 equally sized daily partitions of 10 GiB. A one-day predicate can reduce a scan from roughly 3,650 GiB to 10 GiB before column projection and clustering effects. Filtering `merchant_id` can then skip some blocks inside that day. The actual result depends on column sizes and block distribution; a dry run is an estimate, especially for clustered tables.
+
+An ingestion-time partition answers when data arrived. A timestamp-column partition answers the chosen event date. If yesterday's event arrives today, those layouts place it in different partitions. Corrections and backfills must use the table's actual partition contract.
+
+Use half-open timestamp ranges, such as `event_timestamp >= TIMESTAMP '2026-08-01' AND event_timestamp < TIMESTAMP '2026-08-02'`. Check that expressions allow partition elimination. A filter on an unrelated date field does not satisfy the intent merely because it mentions a date. Integer-range partitioning has its own predicate restrictions.
+
+Search indexes are separate structures with supported predicates, coverage, maintenance and storage costs. Creating an index does not guarantee every `LIKE`, JSON or equality expression uses it. Inspect job statistics for index usage/rejection reasons. Compare an actual indexed lookup with a representative scan after indexing completes.
+
+## Exercise and answers
+
+Compare one unfiltered query, one partition-filtered query and one query with both partition and leading clustering filters. Disable result caching; record processed bytes and result equality. Do not use a small `LIMIT` as the cost control. Then query by the second clustering column alone and explain why its benefit can differ.
+
+??? note "What to look for"
+    Partition elimination should narrow the eligible date range. Clustering benefit depends on the sort prefix and data distribution; it is not an additional fixed discount. For a small table, the maintenance and layout complexity may buy little.
+
+Sources: [partitioned tables](https://docs.cloud.google.com/bigquery/docs/partitioned-tables), [clustered tables](https://docs.cloud.google.com/bigquery/docs/clustered-tables), and [search indexes](https://docs.cloud.google.com/bigquery/docs/search-intro).
 
 | Previous Lesson | Curriculum | Next Lesson |
 | :--- | :---: | ---: |

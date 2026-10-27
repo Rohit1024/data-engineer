@@ -2,134 +2,81 @@
 icon: lucide/refresh-cw
 ---
 
-# Change Data Capture (CDC) with Datastream and BigQuery
+# Change data capture with Datastream and BigQuery
 
-Change Data Capture (CDC) extracts row-level changes (inserts, updates, deletes) from operational databases in real time without querying source tables. Google Cloud Datastream is a serverless CDC service that reads database write-ahead logs and streams changes directly into BigQuery or Cloud Storage.
+CDC reads committed database changes from a source log. It reduces repeated extraction scans, but still needs a snapshot boundary, keys, ordering, retention and recovery.
 
----
+## Bootstrap and ongoing replication overlap
 
-## CDC mechanics and log extraction
-
-Datastream connects to source database replication streams rather than polling queries:
-- **PostgreSQL**: Logical decoding plugins (`pgoutput` or `wal2json`) via replication slots.
-- **MySQL**: Binary log (`binlog`) with `ROW` format.
-- **Oracle**: LogMiner or Oracle GoldenGate extracts.
-
-``` mermaid
+```mermaid
 flowchart TD
-    DB["Source PostgreSQL / Cloud SQL (WAL / Logical Slot)"] --> Datastream["Datastream (Serverless Replication Engine)"]
-    Datastream --> BQCDC["BigQuery Direct Ingestion (Storage Write API)"]
-    BQCDC --> ChangeTable["Change Table (Staging Append Log)"]
-    ChangeTable --> BQEngine["BigQuery Continuous Merge Engine"]
-    BQEngine --> TargetTable["Target Replicated Table (Up-to-Date State)"]
+    A["Source table with primary key"] --> B["Initial backfill of existing rows"]
+    A --> C["Committed changes in WAL or binlog"]
+    B --> D["Datastream replication"]
+    C --> D
+    D --> E{"Destination write mode"}
+    E -->|"Merge"| F["BigQuery current row state with CDC apply"]
+    E -->|"Append only"| G["Change history and datastream_metadata"]
 ```
 
----
+The source continues changing while the initial backfill runs. Changes can overlap with backfilled rows and arrive out of order. Source keys and sequence metadata let the destination establish current state. Arrival time is not the source order.
 
-## Datastream to BigQuery replication modes
+For PostgreSQL, configure logical replication, a publication, a supported decoding plugin and a replication slot. MySQL requires the supported row-binlog configuration. Other source engines have their own requirements; an Oracle connection is not an instruction to substitute GoldenGate metadata. Follow the source-specific guide, such as [Cloud SQL PostgreSQL preparation](https://docs.cloud.google.com/datastream/docs/configure-cloudsql-psql).
 
-When replicating to BigQuery, Datastream supports two modes:
+## Current state differs from history
 
-### 1. Direct BigQuery integration (Continuous SQL Merge)
-Datastream streams changes into an internal change table, and BigQuery merges rows into the replica table in near real time (sub-minute latency). No Dataflow pipeline is required.
+In merge mode, BigQuery applies supported upserts and deletes to a replica. Query freshness depends on source lag and destination apply behavior; a staleness setting is not a sub-minute end-to-end guarantee. Tables without suitable keys require different handling.
 
-### 2. GCS intermediate landing (JSON/Avro)
-Datastream writes change files to GCS. You trigger custom Dataflow, Spark, or Dataform ELT jobs to apply transformations before loading into final tables.
+Append-only mode records changes and supplies a `datastream_metadata` struct. Its fields and interpretation depend on documented destination behavior. Do not invent `_metadata_deleted` columns and assume Datastream creates them. Inspect the actual schema and use the official [destination metadata](https://docs.cloud.google.com/datastream/docs/destination-bigquery) and [event-ordering documentation](https://docs.cloud.google.com/datastream/docs/events-and-streams).
 
----
+## Demonstrate ordering with an explicit teaching contract
 
-## Metadata columns in BigQuery change tables
-
-When Datastream writes changes, it appends CDC metadata columns to track change order and operations:
-
-| Metadata column | Type | Purpose |
-| :--- | :--- | :--- |
-| `_metadata_change_type` | `STRING` | Operation: `INSERT`, `UPDATE-INSERT`, `DELETE` |
-| `_metadata_change_sequence_number` | `STRING` | Monotonically increasing Log Sequence Number (LSN) |
-| `_metadata_timestamp` | `TIMESTAMP` | Time transaction committed on source database |
-| `_metadata_deleted` | `BOOLEAN` | `TRUE` if the change represents a deleted row |
-
----
-
-## Materializing the latest state with SQL
-
-If using GCS landing or raw change tables, create a current-state view over the change log:
+The following is runnable GoogleSQL with no tables to create. `version` and `op` are fields of our own example envelope, not promised Datastream column names.
 
 ```sql
-CREATE OR REPLACE VIEW `my_project.analytics_silver.v_customers_current` AS
-WITH ranked_changes AS (
-  SELECT
-    customer_id,
-    email,
-    plan_tier,
-    account_balance,
-    _metadata_timestamp AS last_updated_at,
-    _metadata_deleted,
-    ROW_NUMBER() OVER (
-      PARTITION BY customer_id
-      ORDER BY _metadata_timestamp DESC, _metadata_change_sequence_number DESC
-    ) AS row_num
-  FROM `my_project.raw_cdc.customers_changelog`
+WITH changes AS (
+  SELECT 101 AS order_id, 1 AS version, 'UPSERT' AS op, 2500 AS cents UNION ALL
+  SELECT 101, 3, 'DELETE', NULL UNION ALL
+  SELECT 101, 2, 'UPSERT', 2700 UNION ALL
+  SELECT 102, 1, 'UPSERT', 4200
+), latest AS (
+  SELECT * FROM changes
+  QUALIFY ROW_NUMBER() OVER (
+    PARTITION BY order_id ORDER BY version DESC
+  ) = 1
 )
-SELECT
-  customer_id,
-  email,
-  plan_tier,
-  account_balance,
-  last_updated_at
-FROM ranked_changes
-WHERE row_num = 1
-  AND _metadata_deleted IS FALSE;
+SELECT order_id, cents FROM latest WHERE op != 'DELETE';
 ```
 
----
+Expect only `102 / 4200`. If you filter deletes before ranking, order 101 reappears at version 2. Keep the highest applied version or tombstone so a later replay of version 1 cannot recreate it. Validate that the source does not supply conflicting images for the same key/version before ranking; otherwise a tied winner is arbitrary.
 
-## Hands-on configuration: Datastream connection profile
+## Run the actual CDC path
 
-Configure a PostgreSQL connection profile using `gcloud`:
+[Lesson 0037, method E](0037-bigquery-ingestion-etl-elt-lab.md#7-method-e-datastream-cdc-from-postgresql) supplies the complete disposable PostgreSQL setup, credentials procedure, connectivity, backfill and update/delete fixture. Run that lab rather than a connection-profile command with guessed flags.
 
-```bash
-# 1. Create a private connection profile for source PostgreSQL
-gcloud datastream connection-profiles create pg-source-profile \
-    --location=us-central1 \
-    --type=postgresql \
-    --postgresql-host="10.0.0.15" \
-    --postgresql-port=5432 \
-    --postgresql-username="datastream_cdc_user" \
-    --postgresql-password="SafePasswordHere" \
-    --postgresql-database="core_app_db"
+Before starting, verify the replication identity's permissions, source publication membership, network/TLS connection, supported source types, destination location and service-agent permissions. After backfill, update one primary key, insert another and delete a third. Prove the merged table matches the source at a recorded boundary. Separately inspect append-only metadata if you choose history mode.
 
-# 2. Create BigQuery destination profile
-gcloud datastream connection-profiles create bq-dest-profile \
-    --location=us-central1 \
-    --type=bigquery \
-    --bigquery-dataset="raw_cdc"
+## Protect the source while the consumer is stopped
 
-# 3. Create and start the CDC stream
-gcloud datastream streams create pg-to-bq-stream \
-    --location=us-central1 \
-    --source=pg-source-profile \
-    --destination=bq-dest-profile \
-    --display-name="Postgres Orders CDC Stream"
+A PostgreSQL slot can retain WAL while Datastream is unavailable. Source disk exhaustion can become an application outage. Query retained WAL using the source database:
+
+```sql
+SELECT slot_name, active,
+       pg_size_pretty(pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn)) AS retained_wal
+FROM pg_replication_slots;
 ```
 
----
+This measures retained log distance, not a complete end-to-end freshness SLO. Monitor source disk, slot state, Datastream freshness and BigQuery apply state. If logs disappear before recovery, resume may require a controlled new snapshot/backfill. Do not drop an active replication slot merely to free space.
 
-## Operational pitfalls and troubleshooting
+## Recall and failure drill
 
-1. **Unconsumed replication slots**: If Datastream pauses or errors, the PostgreSQL WAL replication slot retains log segments on disk until the database runs out of disk storage. Monitor `pg_replication_slots` disk consumption in Cloud SQL.
-2. **DDL changes**: Adding a column to the source table is automatically propagated by Datastream to BigQuery. Renaming or dropping columns requires updating downstream views to prevent query breaks.
+1. Why can a successful stream still serve stale analytical results?
+2. Why must a deleted row's sequence survive a replay?
+3. Stop a disposable stream briefly, mutate the source and resume. Which evidence proves catch-up?
 
----
-
-## Summary heuristics
-
-1. Use Datastream with direct BigQuery integration for zero-code, sub-minute replication of OLTP databases into analytics.
-2. Filter deleted rows (`_metadata_deleted IS FALSE`) when querying CDC changelog tables to prevent ghost records.
-3. Monitor source database disk space and replication lag alerts when CDC streams are active.
-
----
+??? note "Expected reasoning"
+    Check both extraction lag and destination apply. Retained tombstones reject older versions. Catch-up requires matching keys and values at a common boundary, plus healthy source and apply progress. A green stream status alone is insufficient.
 
 | Previous Lesson | Curriculum | Next Lesson |
 | :--- | :---: | ---: |
-| [0006: Pub/Sub Lite vs Standard](0006-pubsub-lite-vs-standard.md) | [All Lessons (Index)](index.md) | [0008: DTS & GCS Change Notifications](0008-bigquery-data-transfer-service-gcs-notifications.md) |
+| [0006: Pub/Sub Lite retirement](0006-pubsub-lite-vs-standard.md) | [All Lessons (Index)](index.md) | [0008: DTS & GCS Change Notifications](0008-bigquery-data-transfer-service-gcs-notifications.md) |

@@ -61,19 +61,24 @@ config {
   }
 }
 
-SELECT
-  order_id,
-  customer_id,
-  order_amount,
-  status,
-  order_timestamp,
-  CURRENT_TIMESTAMP() AS updated_at
-FROM ${ref("orders_stream")}
-
+WITH incoming AS (
+  SELECT order_id, customer_id, order_amount, status, order_timestamp,
+         version, ingested_at
+  FROM ${ref("orders_stream")}
+  ${when(incremental(), `
+    WHERE ingested_at >= COALESCE(
+      (SELECT TIMESTAMP_SUB(MAX(ingested_at), INTERVAL 3 DAY) FROM ${self()}),
+      TIMESTAMP '1970-01-01'
+    )
+  `)}
+  QUALIFY ROW_NUMBER() OVER (
+    PARTITION BY order_id ORDER BY version DESC, ingested_at DESC
+  ) = 1
+)
+SELECT source.* FROM incoming source
 ${when(incremental(), `
-  WHERE order_timestamp > (
-    SELECT MAX(order_timestamp) FROM ${self()}
-  )
+  LEFT JOIN ${self()} target USING (order_id)
+  WHERE target.order_id IS NULL OR source.version > target.version
 `)}
 ```
 
@@ -110,7 +115,7 @@ GROUP BY merchant_id
 HAVING total_revenue < 0
 ```
 
-An assertion passes if the query returns **0 rows**. If any row is returned, the assertion fails and halts downstream pipeline execution.
+An assertion passes if the query returns **0 rows**. A returned row fails that assertion. Downstream actions must explicitly depend on the assertion to use it as a publication gate; a model reference alone does not imply a dependency on all its assertions.
 
 ---
 
@@ -142,7 +147,7 @@ SELECT
   order_id,
   ${date_helpers.truncateMonth("order_timestamp")} AS order_month,
   ${date_helpers.formatAuditTimestamp()}
-FROM ${ref("raw_orders")}
+FROM ${ref("orders_stream")}
 ```
 
 ---
@@ -154,6 +159,24 @@ FROM ${ref("raw_orders")}
 3. Keep complex business logic out of JavaScript includes; reserve `.js` files for repetitive boilerplate SQL generators.
 
 ---
+
+## State the incremental contract before trusting the merge
+
+The revised example requires source `version` and `ingested_at` columns. `version` increases per order, and `ingested_at` is a retained arrival timestamp. Validate non-null identity/version, immutable payload per key/version and one resolved source winner before running. The target comparison prevents an older replayed version from overwriting newer state. Equal-version conflicts must fail a separate validation; the filter must not silently hide them.
+
+Using `MAX(order_timestamp)` alone misses late-arriving orders and updates to old orders. `MAX(ingested_at)` with a three-day overlap improves arrival coverage and handles an empty target through `COALESCE`, but it is still a bounded recovery allowance. A longer outage or timestamp backdating requires a recorded cursor, explicit backfill or reconciliation. Version safety does not prove completeness.
+
+`uniqueKey` configures merge matching; it does not deduplicate an ambiguous source or enforce uniqueness as a database constraint. Source filtering and target partition pruning are separate. If you use `updatePartitionFilter`, verify it cannot exclude an existing matching key and cause another insert. Deletes need sequenced tombstones and explicit mutation logic, not an assumption that absent source rows vanish.
+
+## Make quality a dependency
+
+Use a named assertion such as `assert_no_negative_revenue`, and add an explicit dependency on it in the model or publication action that must wait. For built-in assertions, inspect their generated action names or use documented assertion-dependency configuration. An assertion typically runs after its referenced model has materialized; it does not roll that model back. Build in staging and publish only after the required assertions succeed.
+
+## Exercise and expected outcomes
+
+Load order 101 version 2, then replay version 1 with a later arrival time. Expect version 2 to survive. Insert conflicting version-2 values and require the conflict assertion to fail before publication. Try an empty incremental target and confirm its first delta does not disappear because `MAX` was NULL. Finally submit a source update older than the lookback and explain the explicit backfill needed.
+
+Sources: [incremental tables](https://docs.cloud.google.com/dataform/docs/create-tables), [assertions](https://docs.cloud.google.com/dataform/docs/assertions), and [assertion dependencies](https://docs.cloud.google.com/dataform/docs/dependencies).
 
 | Previous Lesson | Curriculum | Next Lesson |
 | :--- | :---: | ---: |

@@ -2,118 +2,66 @@
 icon: lucide/sliders
 ---
 
-# BigQuery slot management: On-Demand vs Editions
+# BigQuery slots, reservations and capacity planning
 
-BigQuery compute pricing operates under two primary models: On-Demand (per-TB scanned) and BigQuery Editions (capacity-based slot reservations). Sizing and assigning slot reservations correctly controls costs and guarantees query SLA predictability across production pipelines and ad-hoc analysts.
+Select a billing and workload-isolation model from measured demand. There is no universal monthly-byte threshold that makes capacity pricing cheaper.
 
----
+## On-demand and capacity pricing measure different things
 
-## On-Demand vs Editions comparison
+On-demand analysis bills eligible bytes processed under the applicable pricing rules. Capacity pricing bills slot capacity under the selected edition and scaling/commitment model. Storage and ingestion remain separate. Filtering fewer columns and partitions can benefit either model, but fewer scanned bytes does not translate directly into the same dollar saving under both.
 
-``` mermaid
+```mermaid
 flowchart TD
-    subgraph OnDemand["On-Demand Pricing ($6.25 / TB Scanned)"]
-        ODQuery["Query Scan (e.g., 2 TB)"] --> ODCost["Billed: $12.50"]
-        ODSlots["Shared Multi-Tenant Slot Pool (Up to 2,000 slots per project)"]
-    end
-
-    subgraph Editions["BigQuery Editions (Slot Reservations)"]
-        EdQuery["Queries scan unlimited TB"] --> Res["Dedicated Reservation (e.g. 100 Baseline + 300 Autoscale)"]
-        Res --> EdCost["Billed: $ per slot-hour (Flat or Autoscaled)"]
-    end
-
-    OnDemand ~~~ Editions
+    A["Jobs submitted by a billing project and location"] --> B{"Applicable reservation assignment?"}
+    B -->|"Yes"| C["Reservation with configured baseline and scaling limits"]
+    B -->|"No"| D["Applicable default or on-demand execution"]
+    C --> E["Scheduler allocates available compute among jobs"]
+    E --> F["Measure queue delay, resource demand and completion time"]
+    D --> F
 ```
 
-| Edition tier | Target workloads | Key features |
-| :--- | :--- | :--- |
-| **Standard** | Ad-hoc analytics, dev environments | Slot autoscaling, multi-statement transactions |
-| **Enterprise** | Production data platforms | Fine-grained security, BI Engine, continuous queries, dynamic slot sharing |
-| **Enterprise Plus** | Regulated, mission-critical enterprise workloads | CMEK, FedRAMP/HIPAA compliance, multi-region disaster recovery |
+A reservation organizes capacity. An assignment routes supported job types from a project, folder or organization. A capacity commitment is a purchase agreement; it is not the same resource as a reservation or assignment. Idle sharing, autoscaling and edition/location compatibility affect the capacity a reservation can use. Review current [workload management](https://docs.cloud.google.com/bigquery/docs/reservations-workload-management) before assuming a fixed maximum is always available.
 
----
+## Provision without guessed command groups
 
-## Slot allocation and reservation architecture
+In a sandbox administration project, use **BigQuery → Capacity management** to select a location and edition, create a reservation and inspect its baseline, maximum and scaling mode. Assign only the intended workload project and job type. Record the configuration and remove it after the exercise; idle capacity can still cost money.
 
-A BigQuery reservation defines a pool of slots. Multiple projects or folders are assigned to reservations with specific job types.
+For CLI automation, use the supported `bq mk --reservation` and assignment commands in [reservation tasks](https://docs.cloud.google.com/bigquery/docs/reservations-tasks). Check the chosen scaling mode's interpretation of baseline, maximum slots and autoscale headroom. A `gcloud bigquery reservations` command copied from another service is not a substitute for documented tooling.
 
-``` mermaid
-flowchart TD
-    subgraph ReservationPool["Enterprise Capacity Commitment (500 Slots)"]
-        ProdRes["Prod ETL Reservation (300 Slots Baseline, Autoscale to 500)"]
-        AdhocRes["Ad-hoc BI Reservation (100 Slots Baseline, Autoscale to 200)"]
-    end
+Feature availability changes by edition. Verify requirements for security, continuous processing and disaster recovery in the current edition matrix instead of assuming all encryption or compliance is exclusive to the highest tier.
 
-    subgraph Assignments["Reservation Assignments"]
-        ETLJob["Composer / Dataform Pipelines"] -->|"Assigned to"| ProdRes
-        Dashboards["Looker / Analysts"] -->|"Assigned to"| AdhocRes
-    end
+## Query actual demand and waiting
 
-    ProdRes -->|"Idle Slots Shared Automatically"| AdhocRes
-```
-
----
-
-## Configuring reservations and assignments with gcloud
-
-### 1. Create a reservation in Enterprise edition
-
-```bash
-# Create an Enterprise reservation with 100 baseline slots and max 400 slots autoscaling
-gcloud bigquery reservations create prod-etl-reservation \
-    --project=my-admin-project \
-    --location=us-central1 \
-    --edition=ENTERPRISE \
-    --slots=100 \
-    --autoscale-max-slots=400 \
-    --ignore-idle-slots=false
-```
-
-Setting `--ignore-idle-slots=false` enables dynamic idle slot sharing: when the ETL reservation is idle during the day, ad-hoc BI queries can burst into those idle slots at zero additional cost.
-
-### 2. Assign projects to the reservation
-
-```bash
-# Assign all queries from the production data engineering project to the reservation
-gcloud bigquery reservations assignments create \
-    --project=my-admin-project \
-    --location=us-central1 \
-    --reservation=prod-etl-reservation \
-    --job-type=QUERY \
-    --assignee-id=my-prod-data-project \
-    --assignee-type=PROJECT
-```
-
----
-
-## Detecting slot starvation and concurrency bottlenecks
-
-When total slot demand exceeds provisioned capacity, BigQuery queues queries until slots free up. Monitor slot contention using `INFORMATION_SCHEMA.RESERVATION_USAGE`:
+Run in the workload's region. You need project-wide job-list permission for this view:
 
 ```sql
-SELECT
-  reservation_name,
-  period_start,
-  AVG(slots_assigned) AS avg_slots_assigned,
-  MAX(slots_assigned) AS peak_slots_assigned,
-  AVG(autoscale_slots) AS avg_autoscale_slots,
-  AVG(wait_ms) AS avg_query_wait_ms
-FROM `region-us`.INFORMATION_SCHEMA.RESERVATION_USAGE
-WHERE period_start > TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 12 HOUR)
-GROUP BY reservation_name, period_start
-HAVING avg_query_wait_ms > 1000
-ORDER BY period_start DESC;
+SELECT job_id, reservation_id,
+       TIMESTAMP_DIFF(start_time, creation_time, MILLISECOND) AS queue_ms,
+       TIMESTAMP_DIFF(end_time, start_time, MILLISECOND) AS run_ms,
+       total_slot_ms,
+       SAFE_DIVIDE(total_slot_ms,
+         TIMESTAMP_DIFF(end_time, start_time, MILLISECOND)) AS average_slots
+FROM `region-us-central1`.INFORMATION_SCHEMA.JOBS_BY_PROJECT
+WHERE creation_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 1 DAY)
+  AND job_type = 'QUERY' AND state = 'DONE'
+  AND (statement_type IS NULL OR statement_type != 'SCRIPT')
+ORDER BY queue_ms DESC;
 ```
 
----
+A job consuming 300,000 slot-ms over 5,000 ms averages 60 slots. Ten overlapping jobs with similar demand suggest much more concurrent capacity than ten jobs spread across an hour. An average over a whole day hides this peak. Use per-second [JOBS_TIMELINE](https://docs.cloud.google.com/bigquery/docs/information-schema-jobs-timeline) and [reservation timelines](https://docs.cloud.google.com/bigquery/docs/information-schema-reservation-timeline) for time-aligned usage and runnable demand.
 
-## Cost optimization decision heuristics
+Queue delay does not always mean too few slots. Inspect concurrency settings, workload priority, quotas and job errors. A long-running single hot stage may need query changes. Borrowed or autoscaled usage also means observed usage is not necessarily equal to baseline capacity.
 
-1. **Use On-Demand** when monthly query scans are under 15 TB or when workloads are unpredictable with long periods of zero activity.
-2. **Switch to Editions** when monthly query scan costs exceed $3,000, or when strict slot quotas are needed to prevent rogue `SELECT *` queries from generating large unexpected bills.
-3. Enable dynamic idle slot sharing between production pipelines and BI reporting reservations to maximize hardware utilization across different peak hours.
+## Worked cost comparison
 
----
+Use hypothetical local rates: analysis costs 5 units/TiB; capacity costs 0.05 units/slot-hour. A workload scanning 100 TiB costs 500 analysis units. A 100-slot baseline for 720 hours costs 3,600 units before autoscaling, so it is not cheaper merely because the table is large. At 1,000 TiB, analysis is 5,000 units, but capacity must still satisfy peak latency and isolation requirements. Substitute actual regional prices and measured scaling history.
+
+## Recall and workload exercise
+
+Create a schedule with a heavy nightly transformation and daytime BI. Compare one shared reservation with two isolated reservations. Describe when idle sharing is useful and when it risks unpredictable completion. Use a replayed representative workload, not a production traffic spike, to measure queue and completion percentiles.
+
+??? note "Answers to the design questions"
+    Isolation protects one workload from another's demand. Sharing improves utilization when peaks differ. A commitment changes purchasing terms, not query correctness. Capacity planning needs peak overlap, query efficiency, scaling behavior and a completion SLO.
 
 | Previous Lesson | Curriculum | Next Lesson |
 | :--- | :---: | ---: |

@@ -4,7 +4,9 @@ icon: lucide/graduation-cap
 
 # GCP data engineering curriculum
 
-All concepts from the roadmap are organized into structured, progressive modules. Each lesson is focused, hands-on, and includes architectural diagrams, internal mechanics, and retrieval exercises.
+The curriculum has 45 lessons aligned with the [workspace mission](../mission.md). The [lesson-by-lesson audit](../references/curriculum-audit.md) records the review of all 40 original lessons, corrections, and five added topics. Use the [lab conventions](../references/lab-conventions.md) for prerequisites, runtime versions and execution scope.
+
+Read in sequence for service foundations. If SQL grain, schema contracts or cloud identity are unfamiliar, read lessons 0041–0043 before the transformation and deployment modules. Checkboxes mean a lesson is authored; demonstrated understanding belongs in `learning-records/`.
 
 ---
 
@@ -18,7 +20,7 @@ All concepts from the roadmap are organized into structured, progressive modules
 
 ## Module 2: Real-time ingestion, messaging and CDC
 - [x] [0005: Cloud Pub/Sub Architecture: Topics, Subscriptions & Flow Control](0005-pubsub-architecture-flow-control.md)
-- [x] [0006: Cloud Pub/Sub Lite vs Standard: Cost vs Latency Trade-offs](0006-pubsub-lite-vs-standard.md)
+- [x] [0006: Pub/Sub Lite retirement and migration choices](0006-pubsub-lite-vs-standard.md)
 - [x] [0007: Change Data Capture (CDC) with Datastream & BigQuery Ingestion](0007-change-data-capture-datastream-bigquery.md)
 - [x] [0008: BigQuery Data Transfer Service (DTS) & GCS Object Change Notifications](0008-bigquery-data-transfer-service-gcs-notifications.md)
 
@@ -45,7 +47,7 @@ All concepts from the roadmap are organized into structured, progressive modules
 
 ## Module 5: Distributed compute with Dataproc and Apache Spark
 - [x] [0020: Cloud Dataproc Architecture: Master/Worker Topology & Ephemeral Clusters](0020-dataproc-architecture-ephemeral-clusters.md)
-- [x] [0021: Dataproc Serverless for Spark: Submitting Interactive and Batch Workloads](0021-dataproc-serverless-spark.md)
+- [x] [0021: Serverless Spark batches: runtime, resources and networking](0021-dataproc-serverless-spark.md)
 - [x] [0022: PySpark ETL Workloads & BigQuery Storage Connector](0022-pyspark-bigquery-connector.md)
 - [x] [0023: Spark Optimization on GCP: Memory Tuning, Dynamic Allocation & Partition Sizing](0023-spark-optimization-memory-tuning-gcp.md)
 
@@ -60,7 +62,7 @@ All concepts from the roadmap are organized into structured, progressive modules
 ---
 
 ## Module 7: Enterprise orchestration with Cloud Composer and Workflows
-- [x] [0028: Cloud Composer (Apache Airflow 2.x) Architecture & GKE Environments](0028-cloud-composer-architecture-gke.md)
+- [x] [0028: Managed Airflow architecture and environment boundaries](0028-cloud-composer-architecture-gke.md)
 - [x] [0029: Designing Resilient DAGs: Google Cloud Operators & Deferrable Execution](0029-resilient-dags-deferrable-operators.md)
 - [x] [0030: Dynamic Task Mapping, XComs & Airflow Best Practices](0030-dynamic-task-mapping-airflow-best-practices.md)
 - [x] [0031: Google Cloud Workflows vs Cloud Composer: When to Use Serverless Orchestration](0031-cloud-workflows-vs-composer.md)
@@ -68,7 +70,7 @@ All concepts from the roadmap are organized into structured, progressive modules
 ---
 
 ## Module 8: Data governance, security, observability and FinOps
-- [x] [0032: Dataplex Architecture: Lakes, Zones, Assets & Data Quality Tasks](0032-dataplex-architecture-data-quality.md)
+- [x] [0032: Governance catalog, discovery and data quality scans](0032-dataplex-architecture-data-quality.md)
 - [x] [0033: Fine-Grained Access Control: Column-Level Security & Row-Level Security](0033-fine-grained-access-control-policy-tags-rls.md)
 - [x] [0034: Automated PII Masking with Sensitive Data Protection (Cloud DLP)](0034-automated-pii-masking-cloud-dlp.md)
 - [x] [0035: End-to-End Pipeline Observability: Cloud Monitoring, Audit Logs & Lineage](0035-pipeline-observability-lineage.md)
@@ -82,3 +84,13 @@ All concepts from the roadmap are organized into structured, progressive modules
 - [x] [0038: Designing BigQuery ETL architecture: load, transform and export](0038-bigquery-etl-architecture-load-transform-export.md)
 - [x] [0039: Managed Service for Apache Airflow: environments, DAGs and BigQuery orchestration](0039-managed-airflow-environments-dags.md)
 - [x] [0040: Recovering failed BigQuery pipelines: duplicates, missing rows and safe backfills](0040-bigquery-failed-job-recovery-backfill.md)
+
+---
+
+## Module 10: Modeling, contracts and platform design
+
+- [x] [0041: GoogleSQL and data modeling: grain, joins, nested rows and history](0041-googlesql-data-modeling.md)
+- [x] [0042: Data contracts, serialization and schema evolution](0042-data-contracts-schema-evolution.md)
+- [x] [0043: Platform identity, networking and infrastructure as code](0043-platform-iam-networking-infrastructure.md)
+- [x] [0044: Reliability, replay and disaster recovery objectives](0044-reliability-disaster-recovery.md)
+- [x] [0045: Platform architecture capstone: requirements, sizing and trade-offs](0045-platform-architecture-capstone.md)

@@ -2,122 +2,74 @@
 icon: lucide/database
 ---
 
-# Bigtable vs Spanner vs Cloud SQL: Selecting the right database
+# Bigtable, Spanner and Cloud SQL: selecting an operational database
 
-Choosing the right transactional or operational store dictates how downstream pipelines ingest, replicate, and serve analytics. On GCP, the three primary transactional and operational engines are Cloud SQL, Cloud Spanner, and Cloud Bigtable. Each solves a distinct operational constraint.
+Choose an operational store from the operations that must be correct, then explain how analytics receives its changes. A table's size alone cannot choose its database.
 
----
+## Start with transactions and access patterns
 
-## Architectural decision framework
-
-Use this decision flow to identify the target database based on volume, consistency requirements, and access patterns:
-
-``` mermaid
+```mermaid
 flowchart TD
-    Start["New Operational Workload"] --> Q1{"Data Volume > 10 TB or Millions of IOPS?"}
-    Q1 -- "No" --> RelCheck{"Strict ACID & Traditional SQL Relational?"}
-    RelCheck -- "Yes" --> CS["Cloud SQL (PostgreSQL / MySQL / SQL Server)"]
-    RelCheck -- "No" --> Q1
-    Q1 -- "Yes" --> Q2{"Access Pattern?"}
-    Q2 -- "Single Key Lookup / Time-Series / Wide-Column" --> BT["Cloud Bigtable (Sub-10ms, No Multi-Row ACID)"]
-    Q2 -- "Global Relational / Multi-Row Transactions" --> SP["Cloud Spanner (TrueTime, External Consistency)"]
+    A["List reads, writes and correctness requirements"] --> B{"Relational transactions across rows?"}
+    B -->|"Yes"| C{"Need distributed relational write scale?"}
+    C -->|"No"| D["Evaluate Cloud SQL engine and primary capacity"]
+    C -->|"Yes"| E["Evaluate Spanner topology and transaction latency"]
+    B -->|"No"| F{"Sorted key and range access fit the workload?"}
+    F -->|"Yes"| G["Evaluate Bigtable row keys and clusters"]
+    F -->|"No"| H["Revisit the data model and candidate services"]
 ```
 
----
+| Store | Mechanics that affect design | Analytics path |
+| --- | --- | --- |
+| Cloud SQL | Managed PostgreSQL, MySQL or SQL Server. Primary handles writes; replicas can lag. | Supported Datastream CDC or controlled extracts |
+| Spanner | Distributed relational storage and transactions; topology affects commit latency. | Change streams and a supported processing connector |
+| Bigtable | Sorted row keys and column families; atomic mutations within one row. Routing affects replicated-read consistency. | Change streams, Beam reads or external analysis where supported |
 
-## Comparative technical matrix
+Do not promise fixed millisecond latency, a universal data-size cutoff or linear scaling for every workload. Indexes, hot keys, transaction scope, regional placement and client behavior change the result.
 
-| Capability | Cloud SQL | Cloud Spanner | Cloud Bigtable |
-| :--- | :--- | :--- | :--- |
-| **Data model** | Relational (RDBMS) | Relational (ANSI SQL) | NoSQL Wide-column |
-| **Max storage** | 64 TB per instance | Practically unlimited (Petabytes) | Practically unlimited (Petabytes) |
-| **Scaling** | Vertical (read replicas horizontal) | Horizontal (compute & storage decouple) | Horizontal (linear scaling per node) |
-| **Consistency** | Strong (Single-master) | Strong globally (TrueTime + Paxos) | Eventual across replications (strong single-cluster) |
-| **Read latency** | 10 to 50ms | 10 to 20ms | 1 to 6ms |
-| **Write latency** | 10 to 50ms | 15 to 30ms (two-phase commit) | 1 to 5ms (appends to commit log) |
-| **Analytics ingestion** | CDC (Datastream) or Batch export | Change Streams & Dataflow connector | Beam BigtableIO & BigQuery federation |
+## Work through one business requirement
 
----
+An online store needs to decrement stock and create an order atomically. In Cloud SQL, a transaction can lock and update the relevant relational rows. Read replicas can serve stale inventory, so route authoritative availability checks to the appropriate primary path.
 
-## Deep dive: Engine internals
+If the same application requires distributed relational write capacity, evaluate Spanner. TrueTime and replication help provide external consistency; they do not eliminate distributed coordination or make a cross-region transaction free. Use keys that spread writes. A timestamp-leading primary key can concentrate new writes in one range.
 
-### 1. Cloud SQL
-Runs managed MySQL, PostgreSQL, or SQL Server instances on Compute Engine VMs with persistent disks.
-- **Limitation**: Writes route to a single primary instance. Read replicas handle read-only traffic asynchronously, introducing replication lag.
-- **Pipeline use case**: Reference dimensions, customer metadata, and transactional lookups under 10,000 queries per second.
+A telemetry service instead needs `device_id + time range` reads and high write volume. Bigtable can fit this access pattern. An order spanning many independent Bigtable rows does not gain a general relational transaction merely because each row mutation is atomic. See [Spanner schema design](https://docs.cloud.google.com/spanner/docs/schema-design) and [Bigtable schema design](https://docs.cloud.google.com/bigtable/docs/schema-design).
 
-### 2. Cloud Spanner
-Splits data into splits (shards) distributed across Paxos groups. It uses Google's hardware TrueTime API (GPS receivers and atomic clocks) to provide external consistency without central lock managers.
-- **Interleaving**: Spanner allows child tables to physically co-locate on the same splits as parent tables, avoiding distributed network joins.
-- **Pipeline use case**: Globally distributed ledger entries, core billing engines, and high-frequency inventory tracking.
+## A row-key example with a real trade-off
 
-### 3. Cloud Bigtable
-A sparse, distributed multi-dimensional sorted map. Data is indexed by a single row key, column family, column qualifier, and timestamp.
-- **Row key design**: Bigtable orders keys lexicographically. Sequential keys cause hotspotting on a single tablet server.
-- **Pipeline use case**: IoT telemetry, financial ticker feeds, and clickstream ingestion pushing hundreds of thousands of events per second.
+`2026-10-28#device-42` places current writes near each other. `device-42#2026-10-28T09:00:00Z` supports device-range reads and spreads different devices across key ranges. One unusually busy device can still be hot.
 
----
+Adding a hash prefix spreads that device's writes, but querying its complete time range now requires several range scans and a merge. Never add random salts without specifying how readers find all pieces. Column-family garbage collection controls versions and age; it does not replace the event-retention contract of your analytical system.
 
-## Hotspotting prevention in Bigtable
+## Run a local key-design exercise
 
-``` mermaid
-flowchart TD
-    subgraph BadKey["Anti-Pattern: Sequential Key (Hotspotting)"]
-        K1["2026-08-20#sensor_01"] --> NodeA["Tablet 1 (100% CPU Load)"]
-        K2["2026-08-20#sensor_02"] --> NodeA
-        K3["2026-08-20#sensor_03"] --> NodeA
-    end
+This Python example needs only the standard library:
 
-    subgraph GoodKey["Best Practice: Salted / Reversed Key"]
-        K4["sensor_01#2026-08-20"] --> Node1["Tablet 1"]
-        K5["sensor_99#2026-08-20"] --> Node2["Tablet 2"]
-        K6["sensor_42#2026-08-20"] --> Node3["Tablet 3"]
-    end
+```python
+from collections import Counter
+from hashlib import sha256
 
-    BadKey ~~~ GoodKey
+devices = ["device-42"] * 900 + [f"device-{i}" for i in range(100)]
+prefixes = [sha256(device.encode()).hexdigest()[:2] for device in devices]
+loads = Counter(prefixes)
+print(max(loads.values()))
+assert max(loads.values()) >= 900
 ```
 
----
+Hashing only the device ID does not split one hot device. To split it, the shard choice must vary within that device, and range readers must fan out. For account balances, this may conflict with single-row atomicity requirements. The access pattern and transaction requirement must be considered together.
 
-## Hands-on exercise: Creating a Spanner instance and table with change streams
+For a cloud exercise, follow the [Spanner change-stream guide](https://docs.cloud.google.com/spanner/docs/change-streams) in a disposable project. Create a table keyed by a distributed order ID, enable its change stream, insert and update one order, then explain how a downstream consumer checkpoints progress and handles retention. Provisioning the database alone does not build a CDC pipeline.
 
-Spanner Change Streams capture real-time inserts, updates, and deletes, feeding downstream Dataflow and BigQuery pipelines.
+## Recall and design check
 
-```bash
-# 1. Create a regional Spanner instance
-gcloud spanner instances create prod-spanner-01 \
-    --config=regional-us-central1 \
-    --description="Core Production Ledger" \
-    --nodes=1
+1. Why is "more than 10 TB means Spanner" an unreliable rule?
+2. Why can a replica return a different inventory value from the primary?
+3. A Bigtable query needs every device's sales grouped by country. What does this imply?
 
-# 2. Create database
-gcloud spanner databases create orders_db \
-    --instance=prod-spanner-01
-
-# 3. Create table with change stream enabled using DDL
-gcloud spanner databases ddl update orders_db \
-    --instance=prod-spanner-01 \
-    --ddl='
-      CREATE TABLE Orders (
-        OrderId STRING(36) NOT NULL,
-        CustomerId STRING(36) NOT NULL,
-        OrderAmount NUMERIC NOT NULL,
-        CreatedAt TIMESTAMP NOT NULL OPTIONS (allow_commit_timestamp=true)
-      ) PRIMARY KEY (OrderId);
-
-      CREATE CHANGE STREAM OrdersStream FOR Orders;
-    '
-```
-
----
-
-## Summary heuristics
-
-1. Use Cloud SQL when you need standard SQL relational features, have less than 10 TB of data, and can tolerate single-node write limits.
-2. Use Cloud Spanner when you require relational consistency, multi-table transactions, and global horizontal scale.
-3. Use Cloud Bigtable when you have petabytes of semi-structured data, need sub-10ms single-key reads and writes, and access data strictly through row keys.
-
----
+??? note "Answers"
+    1. Transaction shape, write distribution and required operations matter more than a size threshold.
+    2. Asynchronous replication can lag; routing and consistency configuration matter.
+    3. This is an analytical scan/aggregation requirement. Export or replicate into an analytical system rather than assuming a row-key lookup solves it.
 
 | Previous Lesson | Curriculum | Next Lesson |
 | :--- | :---: | ---: |

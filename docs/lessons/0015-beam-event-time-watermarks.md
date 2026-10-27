@@ -2,123 +2,77 @@
 icon: lucide/clock
 ---
 
-# Streaming concepts: Event time, processing time, watermarks, and allowed lateness
+# Event time, processing time, watermarks and late data
 
-Processing unbounded streaming data requires handling out-of-order records, network delays, and mobile client offline periods. The Apache Beam streaming model separates **event time** (when the event occurred) from **processing time** (when the data engine observes the event).
+Business metrics need an explicit time model. A sale's event timestamp, the time Pub/Sub receives it and the time a worker processes it can differ.
 
----
+## Follow one delayed event
 
-## Event time vs Processing time
+An event occurs at 12:03 on a mobile device. The device reconnects at 12:10 and the worker processes it at 12:10:02. Its event time is 12:03, its ingestion time is around 12:10, and its processing time depends on when each transform handles it. Keep these fields separate.
 
-``` mermaid
+```mermaid
 flowchart TD
-    EventGen["Event Occurs on Mobile Client (Event Time: 12:00:00)"] -->|"Device goes offline / Network delay"| Lag["5-Minute Network Lag"]
-    Lag --> PubSub["Pub/Sub Ingestion (Ingestion Time: 12:05:00)"]
-    PubSub --> Dataflow["Dataflow Worker (Processing Time: 12:05:02)"]
+    A["Event timestamp 12:03"] --> B["Device remains offline"]
+    B --> C["Publish at 12:10"]
+    C --> D["Worker processes at 12:10:02"]
+    D --> E["Assign to event-time window 12:00 through 12:05"]
+    E --> F["Evaluate trigger and window expiration against watermark"]
 ```
 
-- **Event time**: The timestamp embedded within the record payload when the event physically took place on the client device.
-- **Processing time**: The wall-clock time of the Dataflow worker processing the record.
-- **Watermark**: A monotonically increasing timestamp tracking the system's progress through event time.
+A watermark estimates progress through event time. It is not a guarantee that no older event can ever arrive, nor is it the worker wall clock. A downstream watermark also depends on upstream progress and pending work. One stalled input/key can hold back progress even when many workers are idle.
 
----
+## Lateness belongs to a window's lifetime
 
-## The Watermark mechanism
+For a five-minute window `[12:00,12:05)`, an event timestamped 12:03 belongs to that window even if it arrives later. Once the watermark passes 12:05, the on-time firing can occur. With ten minutes of allowed lateness, the window can retain relevant state until its expiration near watermark 12:15. Trigger configuration determines whether/when retained late data produces another pane.
 
-A watermark of timestamp $T$ represents a guarantee (or high-confidence heuristic) that the pipeline does not expect to see any more records with an event timestamp $t < T$.
+| Watermark when the 12:03 event is handled | Interpretation in this example |
+| --- | --- |
+| 12:04 | Window has not reached its end |
+| 12:08 | Past window end but within retained lateness |
+| 12:16 | Window expired for this aggregation |
 
-``` mermaid
-flowchart TD
-    W1["Current Watermark: 12:04:00"]
-    R1["Record A (Event Time: 12:03:50) -> On-Time Data"]
-    R2["Record B (Event Time: 12:02:10) -> Late Data (t < Watermark)"]
+These are watermark values, not wall-clock arrival deadlines. Allowed lateness alone does not automatically provide a quarantine output for expired events. Retain raw events before a dropping aggregation and define a separate correction/reconciliation path for data outside the streaming contract. See [Beam windowing and watermarks](https://beam.apache.org/documentation/programming-guide/#windowing).
 
-    W1 --> Check{"Evaluate against Watermark"}
-    Check -->|"t >= 12:04:00"| R1
-    Check -->|"t < 12:04:00"| R2
-```
-
-1. **Perfect watermarks**: Possible when sources have deterministic ordering (e.g. static batch files or partitioned monotonically increasing logs).
-2. **Heuristic watermarks**: Used for distributed real-time systems like Cloud Pub/Sub, estimating watermark progression based on message age, backlog, and network latency.
-
----
-
-## Allowed lateness and late data handling
-
-When a record arrives after the watermark has passed the end of its assigned window:
-- If **within allowed lateness**: The window is reopened, re-evaluated, and an updated aggregate is emitted.
-- If **past allowed lateness**: The record is permanently dropped by the runner unless routed to a side output.
-
-``` mermaid
-flowchart TD
-    WindowEnd["Window [12:00 - 12:05] Closes"] --> WatermarkPass["Watermark passes 12:05 (Initial Emit)"]
-    WatermarkPass --> AllowedLateWindow["Allowed Lateness Window (e.g., 10 minutes: until 12:15)"]
-    AllowedLateWindow --> LateRecord1["Late Record (t = 12:03 arrives at 12:10) -> Processed & Emits Update"]
-    AllowedLateWindow --> Expire["Window Garbage Collected at 12:15"]
-    Expire --> DroppedRecord["Late Record (t = 12:03 arrives at 12:20) -> DROPPED"]
-```
-
----
-
-## Attaching event timestamps and handling lateness in Python
+## Assign event time intentionally
 
 ```python
-import apache_beam as beam
-from apache_beam.transforms.window import FixedWindows, Duration
 import json
-import time
+import apache_beam as beam
 
-class ExtractTimestampDoFn(beam.DoFn):
-    def process(self, element: bytes):
-        payload = json.loads(element.decode("utf-8"))
-        event_time_epoch = payload["event_timestamp_ms"] / 1000.0
-        # Yield element with explicit event timestamp
-        yield beam.window.TimestampedValue(payload, event_time_epoch)
-
-def run_streaming_pipeline():
-    options = beam.options.pipeline_options.PipelineOptions(
-        streaming=True,
-        runner="DataflowRunner",
-        project="my-gcp-project",
-        region="us-central1"
-    )
-
-    with beam.Pipeline(options=options) as p:
-        (
-            p
-            | "ReadPubSub" >> beam.io.ReadFromPubSub(subscription="projects/my-gcp-project/subscriptions/orders-sub")
-            | "AssignEventTime" >> beam.ParDo(ExtractTimestampDoFn())
-            | "ApplyWindowAndLateness" >> beam.WindowInto(
-                FixedWindows(60), # 1-minute fixed windows
-                allowed_lateness=Duration(seconds=300), # 5 minutes allowed lateness
-                accumulation_mode=beam.transforms.trigger.AccumulationMode.ACCUMULATING
-            )
-            | "ExtractMerchantKey" >> beam.Map(lambda rec: (rec["merchant_id"], float(rec["amount"])))
-            | "SumRevenuePerMerchant" >> beam.CombinePerKey(sum)
-            | "WriteToBigQuery" >> beam.io.WriteToBigQuery(
-                "my-gcp-project:analytics_mart.realtime_merchant_revenue",
-                write_disposition=beam.io.BigQueryDisposition.WRITE_APPEND
-            )
-        )
+def timestamp_order(raw):
+    row = json.loads(raw)
+    if not isinstance(row["event_epoch_ms"], int):
+        raise ValueError("event_epoch_ms must be integer milliseconds")
+    return beam.window.TimestampedValue(row, row["event_epoch_ms"] / 1000.0)
 ```
 
----
+Apply this through `beam.Map` after a Pub/Sub source and route validation failures through an explicit error transform in a real pipeline. Check plausible timestamp ranges as well as types: seconds mistaken for milliseconds can place data decades away. When using Pub/Sub timestamp attributes, configure the source consistently; payload timestamp reassignment does not automatically make the source's watermark policy aware of arbitrary delayed payload timestamps.
 
-## Watermark lag and pipeline troubleshooting
+## Reproduce time progression locally
 
-In Cloud Dataflow, **Watermark Lag** measures the time difference between current real-world wall clock time and the pipeline watermark.
-- **Normal behavior**: Lag stays steady between 2 and 15 seconds.
-- **Stuck watermark**: If watermark lag grows linearly (e.g. 30 minutes and climbing), a single slow worker or an unacknowledged partition is holding back the global watermark, preventing windows from closing.
+Use [late_panes.py](../examples/beam/late_panes.py), introduced fully in [lesson 0016](0016-beam-windowing-triggers.md). `TestStream` adds timestamped events and explicitly advances watermarks. It tests event-time behavior without sleeping or assuming a live system advances on schedule.
 
----
+```bash
+uv run --no-project --python 3.11 --with apache-beam==2.69.0 \
+  docs/examples/beam/late_panes.py
+```
 
-## Summary heuristics
+The fixture emits a total of 10 at the on-time firing, then 30 after a retained late event adds 20. A later event after window expiration contributes nothing to that aggregation. Those expected values make the policy observable.
 
-1. Always extract and assign timestamps from payload event time rather than relying on Pub/Sub publish timestamps for business metrics.
-2. Set `allowed_lateness` based on mobile client connection patterns (e.g. 5 to 15 minutes), balancing accuracy against the cost of retaining window state in memory.
-3. Monitor watermark lag in the Dataflow monitoring console; a rising lag indicates pipeline bottlenecks or stuck I/O operations.
+## Diagnose freshness rather than memorize a healthy lag
 
----
+Rising watermark age can reflect source backlog, slow I/O, a hot key or a stalled transform. Compare source arrival rate, processing throughput, source backlog, event timestamps and sink freshness. There is no universal healthy 2–15 second lag for all pipelines. A source carrying intentionally old timestamps may be behaving correctly while producing large event-time age.
+
+## Recall and experiment
+
+1. Does five minutes of allowed lateness mean "accept until five wall-clock minutes after the event arrives"?
+2. Does assigning event timestamps itself deduplicate events?
+3. Change the test's late event timestamp into the next window. What should happen?
+
+??? note "Answers"
+    1. No. Expiration is related to window end and watermark progress.
+    2. No. Time assignment and event identity are independent.
+    3. It contributes to its own window. Expected output needs that window's identity rather than treating every emitted total as one business result.
 
 | Previous Lesson | Curriculum | Next Lesson |
 | :--- | :---: | ---: |

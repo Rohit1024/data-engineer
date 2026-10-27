@@ -8,7 +8,7 @@ Live documentation portal: [https://rohit1024.github.io/data-engineer](https://r
 
 ## Overview
 
-This repository contains a 36-lesson curriculum, 8 module cheatsheets, and diagnostic playbooks covering end-to-end data platform engineering on Google Cloud.
+This repository contains 45 lessons across 10 curriculum modules, 8 module cheatsheets, and diagnostic playbooks for data platform engineering on Google Cloud. The [curriculum audit](docs/references/curriculum-audit.md) records the review of all 40 original lessons and five added foundations. Use the [lab conventions](docs/references/lab-conventions.md) for prerequisites and runtime scope.
 
 The material is structured bottom-up from internal mechanics (Dremel, Capacitor, Colossus, Dataflow Streaming Engine, Beam Runner) to distributed implementations and production operations.
 
@@ -25,6 +25,8 @@ flowchart TD
     M5 --> M6["6. Data Transformation with Dataform & dbt"]
     M6 --> M7["7. Enterprise Orchestration with Cloud Composer"]
     M7 --> M8["8. Governance, Security & FinOps"]
+    M8 --> M9["9. End-to-end implementation labs"]
+    M9 --> M10["10. Modeling, contracts and platform design"]
 ```
 
 ---
@@ -32,14 +34,14 @@ flowchart TD
 ## What is covered
 
 ### 1. Storage foundations and lakehouse architecture
-- **GCS internals**: Colossus storage, consistency models, and 4-tier lifecycle policies.
+- **Cloud Storage**: Object generations, consistency, namespace choices, placement and retention/lifecycle policies.
 - **OLTP / NoSQL engine selection**: Cloud SQL vs Spanner (TrueTime, Paxos) vs Bigtable (row-key design).
 - **BigLake and Apache Iceberg**: Open table formats, manifest trees, metadata pruning, and object tables.
 - **Medallion architecture on GCS**: Bronze, Silver, and Gold layer partitioning and file compaction.
 
 ### 2. Real-time ingestion, messaging, and CDC
-- **Cloud Pub/Sub**: Routers, forwarders, dead-letter topics (DLQ), flow control, and direct BigQuery subscriptions.
-- **Pub/Sub Lite**: Pre-provisioned partition throughput and cost inflection points.
+- **Cloud Pub/Sub**: Subscription fan-out, acknowledgements, dead lettering, flow control and managed export paths.
+- **Pub/Sub Lite retirement**: Migration targets, cutover identities and reconciliation.
 - **Datastream CDC**: WAL/binlog replication, BigQuery continuous merge, and changelog deduplication SQL.
 - **BigQuery DTS and GCS notifications**: Scheduled transfers and Eventarc-triggered serverless loads.
 
@@ -71,17 +73,29 @@ flowchart TD
 - **Slim CI**: Running only modified models with `state:modified+` in GitHub Actions.
 
 ### 7. Enterprise orchestration with Cloud Composer and Workflows
-- **Composer 2 architecture**: GKE Autopilot, Celery workers, triggerers, and GCS DAG bucket sync.
+- **Managed Airflow architecture**: Generation/version boundaries, schedulers, workers, triggerers and DAG deployment.
 - **Resilient DAG design**: Deferrable Google Cloud operators and eliminating top-level parsing I/O.
 - **Dynamic Task Mapping**: Fan-out and fan-in architectures using `.expand()`.
 - **Serverless orchestration**: Google Cloud Workflows vs Cloud Composer decision criteria.
 
 ### 8. Data governance, security, observability, and FinOps
-- **Dataplex**: Lakes, zones, assets, and automated AutoDQ YAML scans.
+- **Governance catalog**: Current Knowledge Catalog naming, metadata, discovery and valid data-quality scans.
 - **Fine-grained security**: Policy tags with dynamic data masking (SHA-256) and row-level security (RLS).
 - **Sensitive Data Protection (DLP)**: Crypto-deterministic pseudonymization with Cloud KMS.
 - **Observability**: Cloud Monitoring alert policies, audit logs, and Dataplex data lineage.
 - **FinOps**: Physical vs logical storage billing and query byte limits (`maximum_bytes_billed`).
+
+### 9. End-to-end implementation labs
+
+- Six BigQuery ingestion paths, transactional transformations and validated exports.
+- Complete managed Airflow DAGs and bounded duplicate/missing-row recovery drills.
+
+### 10. Modeling, contracts and platform design
+
+- Fact grain, dimension history, NULLs, nested data and exact money.
+- Serialization, compatible schema changes, event identity and delete sequencing.
+- Runtime identities, private connectivity, federation and scoped Terraform examples.
+- RPO/RTO, retention, snapshot recovery and sized architecture/cross-cloud exercises.
 
 ---
 
@@ -108,7 +122,7 @@ This project uses [Zensical](https://zensical.org) for documentation generation 
 
 ### Prerequisites
 
-- Python 3.11+
+- Python 3.14+ for this documentation project. Local data examples use their separately documented supported runtimes.
 - [`uv`](https://docs.astral.sh/uv/)
 - Node.js (for Mermaid CLI validation)
 
@@ -133,7 +147,7 @@ python3 .agents/skills/teach/scripts/validate_mermaid.py
 ├── docs/
 │   ├── index.md                 # Portal homepage
 │   ├── mission.md               # Learning mission and success criteria
-│   ├── lessons/                 # 36 sequential curriculum lessons
+│   ├── lessons/                 # 45 curriculum lessons across 10 modules
 │   │   ├── index.md             # Curriculum catalog
 │   │   └── 0001-*.md            # Individual lesson files
 │   ├── cheatsheet/              # 8 module reference cheatsheets

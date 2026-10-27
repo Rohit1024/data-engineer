@@ -570,6 +570,12 @@ Remove the retained environment bucket only after confirming it belongs to this 
 
 The [reference catalog](../references/resources.md#managed-airflow-environment-and-dag-lab) records the official sources. Continue with [resilient DAGs](0029-resilient-dags-deferrable-operators.md), [mapping and XComs](0030-dynamic-task-mapping-airflow-best-practices.md), and [BigQuery load-transform-export](0038-bigquery-etl-architecture-load-transform-export.md).
 
+## Extend the lab with a historical-interval and upgrade check
+
+Create fixtures for two explicit historical UTC days with different control totals. Reprocess those intervals through the Airflow version's supported backfill controls. Inspect rendered input paths, day-specific staging tables and the two reporting partitions. Clearing the later day's publish task must leave the earlier day's values unchanged. Record pool/concurrency settings and prove that a retry reads the same immutable input.
+
+For an image upgrade, parse all three DAGs and execute these same fixtures in a matching sandbox image before changing production. Compare provider imports, rendered templates, deferral/resumption, failed-quality behavior and external writes. Passing Python compilation alone cannot establish provider or runtime compatibility. Document the old/new managed image, Python, Airflow and Google provider versions.
+
 | Previous Lesson | All Lessons | Next Lesson |
 | :--- | :---: | ---: |
 | [0038: BigQuery ETL architecture](0038-bigquery-etl-architecture-load-transform-export.md) | [Lesson catalog](index.md) | [0040: BigQuery recovery and backfill](0040-bigquery-failed-job-recovery-backfill.md) |

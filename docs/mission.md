@@ -15,7 +15,7 @@ Transition from basic cloud familiarity to architecting, optimizing, and operati
 - Writing and optimizing Apache Beam (Python/Java) pipelines with advanced windowing, stateful processing, and exact-once semantics.
 - Building distributed PySpark and Spark SQL workloads on Dataproc (managed and serverless) with BigQuery connectors.
 - Implementing modern SQL-based ELT transformations using Dataform (SQLX) and dbt-bigquery with automated assertions.
-- Orchestrating complex multi-cloud and cross-service data workflows using Cloud Composer (Apache Airflow 2.x).
+- Orchestrating complex multi-cloud and cross-service data workflows using Managed Service for Apache Airflow, formerly Cloud Composer. The current labs explicitly target Airflow 2.11; other major versions require compatibility testing.
 - Enforcing enterprise data security, IAM, fine-grained access control (column/row-level security), and Dataplex data governance.
 - Diagnosing pipeline bottlenecks, worker skew, BigQuery slot starvation, and out-of-memory (OOM) failures in production.
 
