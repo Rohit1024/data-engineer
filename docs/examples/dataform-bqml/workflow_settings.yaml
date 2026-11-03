@@ -1,0 +1,7 @@
+defaultProject: your-project-id
+defaultLocation: US
+defaultDataset: bqml_lab
+defaultAssertionDataset: bqml_assertions
+vars:
+  model_path: your-project-id.bqml_lab.delivery_cost_v1
+  feature_snapshot_id: synthetic_delivery_v1

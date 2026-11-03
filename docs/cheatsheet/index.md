@@ -18,3 +18,11 @@ Quick-reference guides, operational checklists, and condensed command snippets f
 - [x] [Module 6: Dataform and dbt-bigquery](06-dataform-dbt.md)
 - [x] [Module 7: Cloud Composer and Apache Airflow](07-cloud-composer-airflow.md)
 - [x] [Module 8: Dataplex, Security, Observability, and FinOps](08-dataplex-security-finops.md)
+
+## Command references
+
+- [x] [bq command cheatsheet](09-bq-cli.md): Full command catalog, frequently used commands, flags, and recovery examples in tables.
+
+| Previous | Cheatsheet index | Next |
+| --- | :---: | ---: |
+| [Interview question index](../interview/index.md) | [All cheatsheets](index.md) | [Cloud Storage and lakehouse](01-cloud-storage-lakehouse.md) |

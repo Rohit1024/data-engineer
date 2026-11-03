@@ -1,0 +1,15 @@
+config {
+  type: "table",
+  dependencies: ["train_delivery_cost"],
+  tags: ["evaluate"]
+}
+
+SELECT *
+FROM ML.EVALUATE(
+  MODEL ${ml_names.modelIdentifier(dataform.projectConfig.vars.model_path)},
+  (
+    SELECT distance_km, service_level, shipping_cost
+    FROM ${ref("delivery_features")}
+    WHERE split_name = 'validation'
+  )
+)

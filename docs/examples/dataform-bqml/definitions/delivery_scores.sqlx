@@ -1,0 +1,21 @@
+config {
+  type: "table",
+  dependencies: ["candidate_quality"],
+  tags: ["score"]
+}
+
+SELECT
+  order_id,
+  feature_date,
+  predicted_shipping_cost,
+  '${dataform.projectConfig.vars.model_path}' AS model_path,
+  '${dataform.projectConfig.vars.feature_snapshot_id}' AS feature_snapshot_id,
+  CURRENT_TIMESTAMP() AS scored_at
+FROM ML.PREDICT(
+  MODEL ${ml_names.modelIdentifier(dataform.projectConfig.vars.model_path)},
+  (
+    SELECT order_id, feature_date, distance_km, service_level
+    FROM ${ref("delivery_features")}
+    WHERE split_name = 'test'
+  )
+)

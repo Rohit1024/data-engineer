@@ -1,0 +1,11 @@
+config { type: "assertion", tags: ["train"] }
+
+SELECT 'Feature fixture does not match the training contract' AS reason
+WHERE (SELECT COUNTIF(split_name = 'train') FROM ${ref("delivery_features")}) != 800
+  OR (SELECT COUNT(*) FROM ${ref("delivery_features")}) != 1000
+  OR (SELECT COUNT(DISTINCT order_id) FROM ${ref("delivery_features")}) != 1000
+  OR EXISTS (
+    SELECT 1 FROM ${ref("delivery_features")}
+    WHERE distance_km IS NULL OR service_level IS NULL OR shipping_cost IS NULL
+      OR distance_km <= 0 OR shipping_cost < 0
+  )

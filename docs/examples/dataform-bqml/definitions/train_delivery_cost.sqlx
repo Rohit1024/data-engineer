@@ -1,0 +1,20 @@
+config {
+  type: "operations",
+  dependencies: ["assert_features"],
+  tags: ["train"]
+}
+
+CREATE MODEL ${ml_names.modelIdentifier(dataform.projectConfig.vars.model_path)}
+TRANSFORM (
+  ML.STANDARD_SCALER(distance_km) OVER () AS distance_scaled,
+  service_level,
+  shipping_cost
+)
+OPTIONS (
+  model_type = 'LINEAR_REG',
+  input_label_cols = ['shipping_cost'],
+  data_split_method = 'NO_SPLIT'
+) AS
+SELECT distance_km, service_level, shipping_cost
+FROM ${ref("delivery_features")}
+WHERE split_name = 'train';

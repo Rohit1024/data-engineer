@@ -1,0 +1,33 @@
+config {
+  type: "operations",
+  hasOutput: true,
+  tags: ["backfill"]
+}
+
+DECLARE v_day DATE DEFAULT DATE '2026-11-01';
+DECLARE v_last DATE DEFAULT DATE '2026-11-02';
+DECLARE v_steps INT64 DEFAULT 0;
+
+CREATE OR REPLACE TABLE ${self()} (
+  event_date DATE, event_count INT64, total_amount NUMERIC
+);
+
+WHILE v_day <= v_last DO
+  SET v_steps = v_steps + 1;
+  ASSERT v_steps <= 7 AS 'Backfill range exceeds the exercise limit';
+
+  MERGE ${self()} AS t
+  USING (
+    SELECT v_day AS event_date, COUNT(*) AS event_count,
+      COALESCE(SUM(amount), 0) AS total_amount
+    FROM ${ref("raw_events")}
+    WHERE event_date = v_day
+  ) AS s
+  ON t.event_date = s.event_date
+  WHEN MATCHED THEN UPDATE SET
+    event_count = s.event_count, total_amount = s.total_amount
+  WHEN NOT MATCHED THEN INSERT (event_date, event_count, total_amount)
+    VALUES (s.event_date, s.event_count, s.total_amount);
+
+  SET v_day = DATE_ADD(v_day, INTERVAL 1 DAY);
+END WHILE;

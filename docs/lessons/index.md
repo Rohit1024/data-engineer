@@ -4,7 +4,7 @@ icon: lucide/graduation-cap
 
 # GCP data engineering curriculum
 
-The curriculum has 45 lessons aligned with the [workspace mission](../mission.md). The [lesson-by-lesson audit](../references/curriculum-audit.md) records the review of all 40 original lessons, corrections, and five added topics. Use the [lab conventions](../references/lab-conventions.md) for prerequisites, runtime versions and execution scope.
+The curriculum has 53 lessons across 12 modules aligned with the [workspace mission](../mission.md). The [lesson-by-lesson audit](../references/curriculum-audit.md) records the review of all 40 original lessons, corrections, and five added topics. Modules 11 and 12 add BigQuery SQL programming with Dataform and a separate BigQuery ML SQL sequence. Use the [lab conventions](../references/lab-conventions.md) for prerequisites, runtime versions and execution scope.
 
 Read in sequence for service foundations. If SQL grain, schema contracts or cloud identity are unfamiliar, read lessons 0041–0043 before the transformation and deployment modules. Checkboxes mean a lesson is authored; demonstrated understanding belongs in `learning-records/`.
 
@@ -94,3 +94,33 @@ Read in sequence for service foundations. If SQL grain, schema contracts or clou
 - [x] [0043: Platform identity, networking and infrastructure as code](0043-platform-iam-networking-infrastructure.md)
 - [x] [0044: Reliability, replay and disaster recovery objectives](0044-reliability-disaster-recovery.md)
 - [x] [0045: Platform architecture capstone: requirements, sizing and trade-offs](0045-platform-architecture-capstone.md)
+
+---
+
+## Module 11: BigQuery SQL programming and Dataform
+
+Learn statement families before control flow, then add procedures, failure handling, and Dataform execution boundaries. Read lessons 0041 and 0025 first if SQL modeling or SQLX is unfamiliar.
+
+- [x] [0046: Statement families: DDL, DML, DCL, load, export, and debugging](0046-bigquery-sql-statement-families.md)
+- [x] [0047: IF, CASE, and WHILE: basic and advanced control flow](0047-bigquery-if-case-while.md)
+- [x] [0048: Procedures, transactions, dynamic SQL, and debugging](0048-bigquery-procedures-transactions-debugging.md)
+- [x] [0049: Use BigQuery scripting in Dataform](0049-bigquery-scripting-dataform.md)
+
+The module includes a [complete Dataform scripting project](../examples/dataform-scripting/workflow_settings.yaml), bounded SQL exercises, failure cases, and expected results. Compilation and cloud execution establish different things.
+
+---
+
+## Module 12: BigQuery ML SQL and pipelines
+
+Build a feature contract and model version, evaluate held-out data, use the model-specific function reference, and automate a gated training and scoring graph. Read module 11 for procedural and Dataform context.
+
+- [x] [0050: ML foundations: model types, features, and training SQL](0050-bigquery-ml-foundations-training.md)
+- [x] [0051: Evaluate, predict, and explain with BigQuery ML SQL](0051-bigquery-ml-evaluation-prediction.md)
+- [x] [0052: Advanced ML SQL reference: forecasts, segments, embeddings, and monitoring](0052-bigquery-ml-advanced-sql-reference.md)
+- [x] [0053: Operate BigQuery ML pipelines with Dataform](0053-bigquery-ml-dataform-pipelines.md)
+
+The module includes a [complete Dataform ML project](../examples/dataform-bqml/workflow_settings.yaml) with synthetic feature data, model training, evaluation, an explicit quality gate, and versioned score output. Specialized examples cover forecasting, clustering, PCA, remote inference, and their limits.
+
+| Previous | Lesson catalog | Next |
+| --- | :---: | ---: |
+| [Workspace home](../index.md) | [All lessons](index.md) | [0001: Cloud Storage](0001-cloud-storage-architecture-lifecycle.md) |

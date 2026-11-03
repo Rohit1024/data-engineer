@@ -1,0 +1,11 @@
+config { type: "assertion", tags: ["evaluate"] }
+
+SELECT 'Candidate quality is missing, nonfinite, or outside the exercise limit' AS reason
+WHERE (SELECT COUNT(*) FROM ${ref("validation_metrics")}) != 1
+  OR EXISTS (
+    SELECT 1 FROM ${ref("validation_metrics")}
+    WHERE mean_absolute_error IS NULL
+      OR IS_NAN(mean_absolute_error)
+      OR IS_INF(mean_absolute_error)
+      OR mean_absolute_error > 2.0
+  )

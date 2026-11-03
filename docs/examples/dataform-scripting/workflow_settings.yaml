@@ -1,0 +1,4 @@
+defaultProject: your-project-id
+defaultLocation: US
+defaultDataset: scripting_lab
+defaultAssertionDataset: scripting_assertions

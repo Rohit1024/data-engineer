@@ -104,4 +104,4 @@ Use a dedicated source credential with the connector's required permissions and 
 
 | Previous Lesson | All Lessons | Next Lesson |
 | --- | :---: | ---: |
-| [0044: Recovery objectives](0044-reliability-disaster-recovery.md) | [Lesson catalog](index.md) | None yet |
+| [0044: Recovery objectives](0044-reliability-disaster-recovery.md) | [Lesson catalog](index.md) | [0046: SQL statement families](0046-bigquery-sql-statement-families.md) |

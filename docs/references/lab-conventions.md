@@ -17,6 +17,8 @@ The curriculum teaches the production-platform mission in [mission.md](../missio
 | GoogleSQL | BigQuery editor or `bq query --use_legacy_sql=false` | Service execution against the selected fixtures |
 | Airflow DAG | Matching Airflow 2.11 image and Google provider for the provided labs | Parsing plus separate runtime integration checks |
 | Dataform/dbt | Matching pinned compiler/adapter and a sandbox target | Compilation plus separately executed data assertions |
+| New Dataform scripting and ML fixtures | Node.js and the CLI/Core 3.1.3 dependencies pinned in each fixture's package.json | SQLX and dependency-graph compilation; BigQuery execution remains a separate check |
+| BigQuery ML training and inference | A billing-enabled lab project, compatible locations, source/model access, and any required endpoint or connection permissions | Successful model jobs plus separately checked metrics, prediction keys, and per-row remote statuses |
 
 The repository's documentation Python version does not imply every data SDK supports that interpreter. `uv run --no-project --python 3.11 --with apache-beam==2.69.0 ...` creates a separate example environment. SDK pins are reproducibility choices for these local fixtures, not instructions to deploy an unreviewed old runtime to production.
 

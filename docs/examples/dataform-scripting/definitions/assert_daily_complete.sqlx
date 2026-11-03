@@ -1,0 +1,13 @@
+config { type: "assertion", tags: ["backfill"] }
+
+SELECT 'The exercise requires two days, three events, and nonnegative amounts' AS reason
+WHERE (SELECT COUNT(*) FROM ${ref("rebuild_daily")}) != 2
+  OR (SELECT COALESCE(SUM(event_count), 0) FROM ${ref("rebuild_daily")}) != 3
+  OR EXISTS (
+    SELECT 1 FROM ${ref("rebuild_daily")}
+    WHERE total_amount IS NULL OR total_amount < 0
+  )
+  OR EXISTS (
+    SELECT 1 FROM ${ref("raw_events")}
+    WHERE amount IS NULL OR amount < 0
+  )

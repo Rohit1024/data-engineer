@@ -1,0 +1,25 @@
+config {
+  type: "incremental",
+  uniqueKey: ["event_id"],
+  tags: ["incremental"],
+  bigquery: { partitionBy: "event_date" },
+  assertions: { nonNull: ["event_id", "event_date", "amount"] }
+}
+
+pre_operations {
+  DECLARE v_cutoff TIMESTAMP DEFAULT (
+    ${when(incremental(),
+      `SELECT COALESCE(TIMESTAMP_SUB(MAX(ingested_at), INTERVAL 3 DAY),
+        TIMESTAMP '1970-01-01') FROM ${self()}`,
+      `SELECT TIMESTAMP '1970-01-01'`)}
+  );
+}
+
+SELECT event_id, event_date, amount, ingested_at
+FROM ${ref("raw_events")}
+WHERE ingested_at >= v_cutoff
+
+post_operations {
+  ASSERT (SELECT COUNTIF(amount < 0 OR amount IS NULL) = 0 FROM ${self()})
+    AS 'Amounts must be present and nonnegative';
+}

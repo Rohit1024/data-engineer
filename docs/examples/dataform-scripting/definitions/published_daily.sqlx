@@ -1,0 +1,8 @@
+config {
+  type: "table",
+  dependencies: ["assert_daily_complete"],
+  tags: ["publish"]
+}
+
+SELECT event_date, event_count, total_amount
+FROM ${ref("rebuild_daily")}

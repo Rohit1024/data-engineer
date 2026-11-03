@@ -15,3 +15,4 @@
 ## Curriculum review
 
 - On 2026-10-28, reviewed all 40 original lessons and added lessons 0041–0045 for modeling, contracts, platform identity/networking, recovery objectives and architecture sizing. See `docs/references/curriculum-audit.md` for findings and validation scope. Authored lessons do not establish demonstrated learner mastery.
+- On 2026-11-03, added module 11 with lessons 0046 through 0049 for BigQuery statement families, procedural SQL, failure handling, and Dataform. Added separate module 12 with lessons 0050 through 0053 for BigQuery ML SQL and pipeline integration. The new Dataform fixtures pin CLI/Core 3.1.3. These additions do not change the historical curriculum audit or establish learner mastery.

@@ -8,7 +8,7 @@ Live documentation portal: [https://rohit1024.github.io/data-engineer](https://r
 
 ## Overview
 
-This repository contains 45 lessons across 10 curriculum modules, 8 module cheatsheets, and diagnostic playbooks for data platform engineering on Google Cloud. The [curriculum audit](docs/references/curriculum-audit.md) records the review of all 40 original lessons and five added foundations. Use the [lab conventions](docs/references/lab-conventions.md) for prerequisites and runtime scope.
+This repository contains 53 lessons across 12 curriculum modules, 9 cheatsheets, and diagnostic playbooks for data platform engineering on Google Cloud. The [curriculum audit](docs/references/curriculum-audit.md) records the review of all 40 original lessons and five added foundations. Modules 11 and 12 add BigQuery procedural SQL with Dataform and BigQuery ML SQL. Use the [lab conventions](docs/references/lab-conventions.md) for prerequisites and runtime scope.
 
 The material is structured bottom-up from internal mechanics (Dremel, Capacitor, Colossus, Dataflow Streaming Engine, Beam Runner) to distributed implementations and production operations.
 
@@ -27,6 +27,8 @@ flowchart TD
     M7 --> M8["8. Governance, Security & FinOps"]
     M8 --> M9["9. End-to-end implementation labs"]
     M9 --> M10["10. Modeling, contracts and platform design"]
+    M10 --> M11["11. BigQuery SQL programming and Dataform"]
+    M11 --> M12["12. BigQuery ML SQL and pipelines"]
 ```
 
 ---
@@ -97,6 +99,20 @@ flowchart TD
 - Runtime identities, private connectivity, federation and scoped Terraform examples.
 - RPO/RTO, retention, snapshot recovery and sized architecture/cross-cloud exercises.
 
+### 11. BigQuery SQL programming and Dataform
+
+- DDL, DML, DCL, procedural language, export, load, and debugging statements.
+- Basic and advanced IF, CASE, and WHILE, including expression versus statement semantics.
+- Stored procedures, dynamic SQL, transactions, exception handling, and script job diagnosis.
+- A complete Dataform project with runtime checkpoints, bounded backfills, and assertion-gated publication.
+
+### 12. BigQuery ML SQL and pipelines
+
+- Feature contracts, preprocessing, model types, training options, and data splits.
+- Evaluation, prediction, explanations, baselines, and model versioning.
+- Forecasting, clustering, PCA, recommendation, remote inference, skew, and drift references.
+- A complete Dataform project with separate feature, training, evaluation, quality, and scoring actions.
+
 ---
 
 ## Diagnostic and debugging playbooks
@@ -147,10 +163,10 @@ python3 .agents/skills/teach/scripts/validate_mermaid.py
 ├── docs/
 │   ├── index.md                 # Portal homepage
 │   ├── mission.md               # Learning mission and success criteria
-│   ├── lessons/                 # 45 curriculum lessons across 10 modules
+│   ├── lessons/                 # 53 curriculum lessons across 12 modules
 │   │   ├── index.md             # Curriculum catalog
 │   │   └── 0001-*.md            # Individual lesson files
-│   ├── cheatsheet/              # 8 module reference cheatsheets
+│   ├── cheatsheet/              # 9 module and command cheatsheets
 │   │   ├── index.md             # Cheatsheet catalog
 │   │   └── 01-*.md              # Individual cheatsheets
 │   ├── debugging/               # 8 diagnostic and troubleshooting playbooks

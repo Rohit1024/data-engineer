@@ -6,6 +6,8 @@ icon: lucide/code
 
 Dataform uses SQLX files to combine declarative SQL with metadata configuration and JavaScript logic. It automatically calculates dependency order by analyzing `ref()` calls across models.
 
+For complete procedural scripts, runtime checkpoints, and assertion gates, continue with [BigQuery scripting in Dataform](0049-bigquery-scripting-dataform.md). The separate [BigQuery ML pipeline lesson](0053-bigquery-ml-dataform-pipelines.md) applies those dependencies to training, evaluation, and scoring.
+
 ---
 
 ## The SQLX structure

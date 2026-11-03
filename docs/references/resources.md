@@ -233,6 +233,87 @@ Source review on 2026-10-28 covered changed service guidance, API shapes and the
 - [S3 connector guide](https://docs.cloud.google.com/bigquery/docs/s3-transfer)
 
 
+## bq command-line reference
+
+Official sources checked on 2026-11-03 for the [bq command cheatsheet](../cheatsheet/09-bq-cli.md). Command names and example flags were also checked against installed BigQuery CLI `2.1.39` help. Local help includes commands omitted from the web reference, including `info`, `shell`, `truncate`, and `undelete`. Verification covers documentation and CLI help, not live cloud execution.
+
+- [bq command-line tool reference](https://docs.cloud.google.com/bigquery/docs/reference/bq-cli-reference)
+- [Run queries](https://docs.cloud.google.com/bigquery/docs/running-queries)
+- [Manage jobs](https://docs.cloud.google.com/bigquery/docs/managing-jobs)
+- [Manage tables and schemas](https://docs.cloud.google.com/bigquery/docs/managing-tables)
+- [Load Parquet from Cloud Storage](https://docs.cloud.google.com/bigquery/docs/loading-data-cloud-storage-parquet)
+- [Export table data](https://docs.cloud.google.com/bigquery/docs/exporting-data)
+- [Restore deleted tables](https://docs.cloud.google.com/bigquery/docs/restore-deleted-tables)
+- [Restore deleted datasets](https://docs.cloud.google.com/bigquery/docs/restore-deleted-datasets)
+- [Reservation tasks](https://docs.cloud.google.com/bigquery/docs/reservations-tasks)
+- [Configure Cloud Storage transfers](https://docs.cloud.google.com/bigquery/docs/cloud-storage-transfer)
+
+## BigQuery SQL programming and Dataform module
+
+Official sources checked on 2026-11-03 for lessons 0046 through 0049. The Dataform scripting example pins CLI/Core 3.1.3. Compiler checks cover SQLX generation and graph dependencies; documentation checks do not execute BigQuery jobs.
+
+- [Procedural language: variables, IF, CASE, loops, exceptions, dynamic SQL, and CALL](https://docs.cloud.google.com/bigquery/docs/reference/standard-sql/procedural-language)
+- [Conditional expressions and evaluation semantics](https://docs.cloud.google.com/bigquery/docs/reference/standard-sql/conditional_expressions)
+- [Multi-statement execution, variable limits, temporary tables, and dry runs](https://docs.cloud.google.com/bigquery/docs/multi-statement-queries)
+- [DDL and procedure definitions](https://docs.cloud.google.com/bigquery/docs/reference/standard-sql/data-definition-language)
+- [DML statements and MERGE](https://docs.cloud.google.com/bigquery/docs/reference/standard-sql/dml-syntax)
+- [DCL statements](https://docs.cloud.google.com/bigquery/docs/reference/standard-sql/data-control-language)
+- [Multi-statement transactions](https://docs.cloud.google.com/bigquery/docs/transactions)
+- [Export statements](https://docs.cloud.google.com/bigquery/docs/reference/standard-sql/export-statements)
+- [Load statements, including current temporary-target support](https://docs.cloud.google.com/bigquery/docs/reference/standard-sql/load-statements)
+- [Debugging statements and ASSERT](https://docs.cloud.google.com/bigquery/docs/reference/standard-sql/debugging-statements)
+- [Job metadata](https://docs.cloud.google.com/bigquery/docs/information-schema-jobs)
+- [Dataform custom operations and output tables](https://docs.cloud.google.com/dataform/docs/custom-sql)
+- [Dataform tables, incremental queries, and pre/post operations](https://docs.cloud.google.com/dataform/docs/create-tables)
+- [Dataform action and assertion dependencies](https://docs.cloud.google.com/dataform/docs/dependencies)
+- [Dataform Core configuration reference](https://docs.cloud.google.com/dataform/docs/reference/dataform-core-reference)
+
+## BigQuery ML SQL and pipeline module
+
+Official sources checked on 2026-11-03 for lessons 0050 through 0053. Native training uses bounded synthetic data. Remote examples require separately configured services. ML-prefixed and AI-prefixed functions can differ in arguments and result fields; use their current model-specific references. The ML Dataform project also pins CLI/Core 3.1.3.
+
+- [Introduction to ML in BigQuery](https://docs.cloud.google.com/bigquery/docs/bigqueryml-intro)
+- [CREATE MODEL and model family catalog](https://docs.cloud.google.com/bigquery/docs/reference/standard-sql/bigqueryml-syntax-create)
+- [Linear and logistic training options](https://docs.cloud.google.com/bigquery/docs/reference/standard-sql/bigqueryml-syntax-create-glm)
+- [Manual feature preprocessing and stored transforms](https://docs.cloud.google.com/bigquery/docs/reference/standard-sql/bigqueryml-preprocessing-functions)
+- [ML.EVALUATE](https://docs.cloud.google.com/bigquery/docs/reference/standard-sql/bigqueryml-syntax-evaluate)
+- [ML.PREDICT](https://docs.cloud.google.com/bigquery/docs/reference/standard-sql/bigqueryml-syntax-predict)
+- [ML.CONFUSION_MATRIX](https://docs.cloud.google.com/bigquery/docs/reference/standard-sql/bigqueryml-syntax-confusion)
+- [ML.ROC_CURVE](https://docs.cloud.google.com/bigquery/docs/reference/standard-sql/bigqueryml-syntax-roc)
+- [ML.TRAINING_INFO](https://docs.cloud.google.com/bigquery/docs/reference/standard-sql/bigqueryml-syntax-train)
+- [ML.FEATURE_INFO](https://docs.cloud.google.com/bigquery/docs/reference/standard-sql/bigqueryml-syntax-feature)
+- [ML.TRANSFORM](https://docs.cloud.google.com/bigquery/docs/reference/standard-sql/bigqueryml-syntax-transform)
+- [ML.WEIGHTS](https://docs.cloud.google.com/bigquery/docs/reference/standard-sql/bigqueryml-syntax-weights)
+- [ML.EXPLAIN_PREDICT](https://docs.cloud.google.com/bigquery/docs/reference/standard-sql/bigqueryml-syntax-explain-predict)
+- [ML.GLOBAL_EXPLAIN](https://docs.cloud.google.com/bigquery/docs/reference/standard-sql/bigqueryml-syntax-global-explain)
+- [ML.TRIAL_INFO](https://docs.cloud.google.com/bigquery/docs/reference/standard-sql/bigqueryml-syntax-trial-info)
+- [ARIMA_PLUS training and limits](https://docs.cloud.google.com/bigquery/docs/reference/standard-sql/bigqueryml-syntax-create-time-series)
+- [ML.FORECAST](https://docs.cloud.google.com/bigquery/docs/reference/standard-sql/bigqueryml-syntax-forecast)
+- [ML.ARIMA_EVALUATE](https://docs.cloud.google.com/bigquery/docs/reference/standard-sql/bigqueryml-syntax-arima-evaluate)
+- [ML.DETECT_ANOMALIES](https://docs.cloud.google.com/bigquery/docs/reference/standard-sql/bigqueryml-syntax-detect-anomalies)
+- [AI.FORECAST and built-in TimesFM](https://docs.cloud.google.com/bigquery/docs/reference/standard-sql/bigqueryml-syntax-ai-forecast)
+- [KMEANS training](https://docs.cloud.google.com/bigquery/docs/reference/standard-sql/bigqueryml-syntax-create-kmeans)
+- [ML.CENTROIDS](https://docs.cloud.google.com/bigquery/docs/reference/standard-sql/bigqueryml-syntax-centroids)
+- [PCA training](https://docs.cloud.google.com/bigquery/docs/reference/standard-sql/bigqueryml-syntax-create-pca)
+- [ML.PRINCIPAL_COMPONENTS](https://docs.cloud.google.com/bigquery/docs/reference/standard-sql/bigqueryml-syntax-principal-components)
+- [Matrix factorization training](https://docs.cloud.google.com/bigquery/docs/reference/standard-sql/bigqueryml-syntax-create-matrix-factorization)
+- [ML.RECOMMEND](https://docs.cloud.google.com/bigquery/docs/reference/standard-sql/bigqueryml-syntax-recommend)
+- [ML.GET_INSIGHTS](https://docs.cloud.google.com/bigquery/docs/reference/standard-sql/bigqueryml-syntax-get-insights)
+- [Remote model connections and endpoints](https://docs.cloud.google.com/bigquery/docs/reference/standard-sql/bigqueryml-syntax-create-remote-model)
+- [Choose a text-generation function](https://docs.cloud.google.com/bigquery/docs/choose-text-generation-function)
+- [AI.GENERATE](https://docs.cloud.google.com/bigquery/docs/reference/standard-sql/bigqueryml-syntax-ai-generate)
+- [AI.GENERATE_TEXT](https://docs.cloud.google.com/bigquery/docs/reference/standard-sql/bigqueryml-syntax-ai-generate-text)
+- [AI.GENERATE_EMBEDDING](https://docs.cloud.google.com/bigquery/docs/reference/standard-sql/bigqueryml-syntax-ai-generate-embedding)
+- [Existing ML.GENERATE_TEXT interface](https://docs.cloud.google.com/bigquery/docs/reference/standard-sql/bigqueryml-syntax-generate-text)
+- [Existing ML.GENERATE_EMBEDDING interface](https://docs.cloud.google.com/bigquery/docs/reference/standard-sql/bigqueryml-syntax-generate-embedding)
+- [ML.VALIDATE_DATA_SKEW](https://docs.cloud.google.com/bigquery/docs/reference/standard-sql/bigqueryml-syntax-validate-data-skew)
+- [ML.VALIDATE_DATA_DRIFT](https://docs.cloud.google.com/bigquery/docs/reference/standard-sql/bigqueryml-syntax-validate-data-drift)
+- [ALTER MODEL](https://docs.cloud.google.com/bigquery/docs/reference/standard-sql/bigqueryml-syntax-alter-model)
+- [DROP MODEL](https://docs.cloud.google.com/bigquery/docs/reference/standard-sql/bigqueryml-syntax-drop-model)
+- [EXPORT MODEL](https://docs.cloud.google.com/bigquery/docs/reference/standard-sql/bigqueryml-syntax-export-model)
+- [Exportable model types, formats, and preprocessing limits](https://docs.cloud.google.com/bigquery/docs/exporting-models)
+- [BigQuery and ML quotas](https://docs.cloud.google.com/bigquery/quotas)
+
 | Previous | References | Next |
 | --- | :---: | ---: |
 | [Reference index](index.md) | [All references](index.md) | [Curriculum audit](curriculum-audit.md) |

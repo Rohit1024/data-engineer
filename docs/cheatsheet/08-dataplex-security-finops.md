@@ -120,4 +120,4 @@ query_job = client.query("SELECT * FROM `my_project.analytics.fact_orders`", job
 
 | Previous Cheatsheet | All Cheatsheets | Next Cheatsheet |
 | :--- | :---: | ---: |
-| [07: Cloud Composer & Airflow](07-cloud-composer-airflow.md) | [Cheatsheets Index](index.md) | *None (All Cheatsheets Complete)* |
+| [07: Cloud Composer & Airflow](07-cloud-composer-airflow.md) | [Cheatsheets Index](index.md) | [09: bq commands](09-bq-cli.md) |

@@ -1,0 +1,12 @@
+config {
+  type: "table",
+  tags: ["fixture"],
+  bigquery: { partitionBy: "DATE(ingested_at)" }
+}
+
+SELECT 1 AS event_id, DATE '2026-11-01' AS event_date,
+  NUMERIC '10' AS amount, TIMESTAMP '2026-11-01 01:00:00+00' AS ingested_at
+UNION ALL
+SELECT 2, DATE '2026-11-01', NUMERIC '20', TIMESTAMP '2026-11-01 02:00:00+00'
+UNION ALL
+SELECT 3, DATE '2026-11-02', NUMERIC '30', TIMESTAMP '2026-11-02 01:00:00+00'

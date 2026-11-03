@@ -68,6 +68,8 @@ GROUP BY merchant_id, order_date;
 
 ## Essential `bq` CLI operations
 
+See the [bq command cheatsheet](09-bq-cli.md) for the full command catalog and tables of daily commands, flags, and job recovery examples.
+
 ```bash
 # Dry run query to estimate scanned bytes and costs before executing
 bq query --use_legacy_sql=false --dry_run \

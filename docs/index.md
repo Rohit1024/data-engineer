@@ -13,7 +13,7 @@ This workspace covers ingestion, storage, stream and batch processing, transform
 ## Quick navigation
 
 - [The mission](mission.md): The guiding compass and outcomes for this workspace.
-- [Curriculum and lessons](lessons/index.md): All 45 lessons across 10 modules, with local examples and cloud labs.
+- [Curriculum and lessons](lessons/index.md): All 53 lessons across 12 modules, including BigQuery procedural SQL, Dataform, and BigQuery ML.
 - [Curriculum audit](references/curriculum-audit.md): Coverage findings and corrections for every original lesson.
 - [Cheatsheets](cheatsheet/index.md): Fast lookups, query snippets, and gcloud/bq CLI references.
 - [Debugging guides](debugging/index.md): Practical diagnostic workflows and failure mode resolution.
@@ -35,6 +35,8 @@ flowchart TD
     M7 --> M8["8. Governance, Security & FinOps"]
     M8 --> M9["9. End-to-end implementation labs"]
     M9 --> M10["10. Modeling, contracts and platform design"]
+    M10 --> M11["11. BigQuery SQL programming and Dataform"]
+    M11 --> M12["12. BigQuery ML SQL and pipelines"]
 ```
 
 ---

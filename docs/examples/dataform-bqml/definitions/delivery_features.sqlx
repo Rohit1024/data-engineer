@@ -1,0 +1,20 @@
+config { type: "table", tags: ["fixture"] }
+
+WITH inputs AS (
+  SELECT
+    id AS order_id,
+    DATE_ADD(DATE '2026-01-01', INTERVAL DIV(id - 1, 10) DAY) AS feature_date,
+    CAST(1 + MOD(id, 30) AS FLOAT64) AS distance_km,
+    IF(MOD(id, 2) = 0, 'express', 'standard') AS service_level,
+    CASE
+      WHEN id <= 800 THEN 'train'
+      WHEN id <= 900 THEN 'validation'
+      ELSE 'test'
+    END AS split_name
+  FROM UNNEST(GENERATE_ARRAY(1, 1000)) AS id
+)
+SELECT *,
+  3.0 + 0.7 * distance_km
+    + IF(service_level = 'express', 5.0, 0.0)
+    + 0.1 * (MOD(order_id, 7) - 3) AS shipping_cost
+FROM inputs
