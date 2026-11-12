@@ -314,6 +314,31 @@ Official sources checked on 2026-11-03 for lessons 0050 through 0053. Native tra
 - [Exportable model types, formats, and preprocessing limits](https://docs.cloud.google.com/bigquery/docs/exporting-models)
 - [BigQuery and ML quotas](https://docs.cloud.google.com/bigquery/quotas)
 
+## Medallia feedback ingestion with Cloud Run functions
+
+Official sources checked on 2026-11-12 for lesson 0054. The example uses Python 3.12 and the Cloud Functions v2 deployment path. Offline tests cover pagination and manifest publication; they do not establish live Medallia access, GCP deployment, or BigQuery execution. Tenant field IDs, encodings, account scope, and integration entitlements need environment-specific verification.
+
+- [Medallia extraction interfaces and reporting consistency](https://developer.medallia.com/medallia-apis/docs/extract-survey-responses-for-offline-analysis-data-warehousing)
+- [Medallia OAuth client credentials and authorization scope](https://developer.medallia.com/medallia-apis/reference/authentication)
+- [Medallia gateway hosts, errors, and rate-limit headers](https://developer.medallia.com/medallia-apis/reference/integrations)
+- [Medallia Query API objects, fields, filters, sorting, and pagination](https://developer.medallia.com/medallia-apis/reference/query-api-overview)
+- [Medallia Query API HTTP endpoint](https://developer.medallia.com/medallia-apis/reference/query-1)
+- [Medallia reference extractor and initial-finish checkpoint design](https://github.com/medallia/query-api-data-extract)
+- [Medallia NPS definition](https://www.medallia.com/experience-101/glossary/net-promoter-score/)
+- [GraphQL response data and errors](https://spec.graphql.org/September2025/#sec-Response)
+- [Cloud Run functions and Cloud Functions API comparison](https://docs.cloud.google.com/run/docs/functions/comparison)
+- [Python function runtimes](https://docs.cloud.google.com/run/docs/runtimes/python)
+- [Function deployment CLI](https://docs.cloud.google.com/sdk/gcloud/reference/functions/deploy)
+- [Function invocation authentication](https://docs.cloud.google.com/functions/docs/securing/authenticating)
+- [Secret configuration and version behavior](https://docs.cloud.google.com/run/docs/configuring/services/secrets)
+- [Function lifecycle and idempotency practices](https://docs.cloud.google.com/run/docs/tips/functions-best-practices)
+- [Cloud Scheduler delivery and retries](https://docs.cloud.google.com/scheduler/docs/overview)
+- [Cloud Scheduler HTTP authentication](https://docs.cloud.google.com/scheduler/docs/http-target-auth)
+- [Cloud Scheduler HTTP job CLI](https://docs.cloud.google.com/sdk/gcloud/reference/scheduler/jobs/create/http)
+- [Cloud Storage generation preconditions](https://docs.cloud.google.com/storage/docs/request-preconditions)
+- [Load NDJSON and JSON columns into BigQuery](https://docs.cloud.google.com/bigquery/docs/loading-data-cloud-storage-json)
+- [BigQuery MERGE semantics](https://docs.cloud.google.com/bigquery/docs/reference/standard-sql/dml-syntax#merge_statement)
+
 | Previous | References | Next |
 | --- | :---: | ---: |
 | [Reference index](index.md) | [All references](index.md) | [Curriculum audit](curriculum-audit.md) |

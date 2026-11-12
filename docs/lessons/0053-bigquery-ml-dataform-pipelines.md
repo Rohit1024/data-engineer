@@ -191,4 +191,4 @@ After cloud execution, remove only the fixture tables, assertion views, and mode
 
 | Previous lesson | All lessons | Next lesson |
 | --- | :---: | ---: |
-| [0052: Advanced ML SQL reference](0052-bigquery-ml-advanced-sql-reference.md) | [Lesson catalog](index.md) | None yet |
+| [0052: Advanced ML SQL reference](0052-bigquery-ml-advanced-sql-reference.md) | [Lesson catalog](index.md) | [0054: Medallia feedback ingestion](0054-medallia-cloud-functions-ingestion.md) |

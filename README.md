@@ -8,7 +8,7 @@ Live documentation portal: [https://rohit1024.github.io/data-engineer](https://r
 
 ## Overview
 
-This repository contains 53 lessons across 12 curriculum modules, 9 cheatsheets, and diagnostic playbooks for data platform engineering on Google Cloud. The [curriculum audit](docs/references/curriculum-audit.md) records the review of all 40 original lessons and five added foundations. Modules 11 and 12 add BigQuery procedural SQL with Dataform and BigQuery ML SQL. Use the [lab conventions](docs/references/lab-conventions.md) for prerequisites and runtime scope.
+This repository contains 54 lessons across 13 curriculum modules, 9 cheatsheets, and diagnostic playbooks for data platform engineering on Google Cloud. The [curriculum audit](docs/references/curriculum-audit.md) records the review of all 40 original lessons and five added foundations. Modules 11 and 12 add BigQuery procedural SQL with Dataform and BigQuery ML SQL. Module 13 covers Medallia feedback ingestion with Cloud Run functions. Use the [lab conventions](docs/references/lab-conventions.md) for prerequisites and runtime scope.
 
 The material is structured bottom-up from internal mechanics (Dremel, Capacitor, Colossus, Dataflow Streaming Engine, Beam Runner) to distributed implementations and production operations.
 
@@ -29,6 +29,7 @@ flowchart TD
     M9 --> M10["10. Modeling, contracts and platform design"]
     M10 --> M11["11. BigQuery SQL programming and Dataform"]
     M11 --> M12["12. BigQuery ML SQL and pipelines"]
+    M12 --> M13["13. SaaS ingestion with Cloud Run functions"]
 ```
 
 ---
@@ -113,6 +114,12 @@ flowchart TD
 - Forecasting, clustering, PCA, recommendation, remote inference, skew, and drift references.
 - A complete Dataform project with separate feature, training, evaluation, quality, and scoring actions.
 
+### 13. SaaS ingestion with Cloud Run functions
+
+- Medallia Query API authentication, field contracts, and pagination.
+- A bounded Python extractor with offline failure tests and manifest-based raw publication.
+- BigQuery validation and NPS SQL, recurring checkpoints, replay, and reconciliation.
+
 ---
 
 ## Diagnostic and debugging playbooks
@@ -163,7 +170,7 @@ python3 .agents/skills/teach/scripts/validate_mermaid.py
 ├── docs/
 │   ├── index.md                 # Portal homepage
 │   ├── mission.md               # Learning mission and success criteria
-│   ├── lessons/                 # 53 curriculum lessons across 12 modules
+│   ├── lessons/                 # 54 curriculum lessons across 13 modules
 │   │   ├── index.md             # Curriculum catalog
 │   │   └── 0001-*.md            # Individual lesson files
 │   ├── cheatsheet/              # 9 module and command cheatsheets

@@ -4,7 +4,7 @@ icon: lucide/graduation-cap
 
 # GCP data engineering curriculum
 
-The curriculum has 53 lessons across 12 modules aligned with the [workspace mission](../mission.md). The [lesson-by-lesson audit](../references/curriculum-audit.md) records the review of all 40 original lessons, corrections, and five added topics. Modules 11 and 12 add BigQuery SQL programming with Dataform and a separate BigQuery ML SQL sequence. Use the [lab conventions](../references/lab-conventions.md) for prerequisites, runtime versions and execution scope.
+The curriculum has 54 lessons across 13 modules aligned with the [workspace mission](../mission.md). The [lesson-by-lesson audit](../references/curriculum-audit.md) records the review of all 40 original lessons, corrections, and five added topics. Modules 11 and 12 add BigQuery SQL programming with Dataform and a separate BigQuery ML SQL sequence. Module 13 applies ingestion and recovery design to Medallia customer feedback. Use the [lab conventions](../references/lab-conventions.md) for prerequisites, runtime versions and execution scope.
 
 Read in sequence for service foundations. If SQL grain, schema contracts or cloud identity are unfamiliar, read lessons 0041–0043 before the transformation and deployment modules. Checkboxes mean a lesson is authored; demonstrated understanding belongs in `learning-records/`.
 
@@ -120,6 +120,16 @@ Build a feature contract and model version, evaluate held-out data, use the mode
 - [x] [0053: Operate BigQuery ML pipelines with Dataform](0053-bigquery-ml-dataform-pipelines.md)
 
 The module includes a [complete Dataform ML project](../examples/dataform-bqml/workflow_settings.yaml) with synthetic feature data, model training, evaluation, an explicit quality gate, and versioned score output. Specialized examples cover forecasting, clustering, PCA, remote inference, and their limits.
+
+---
+
+## Module 13: SaaS ingestion with Cloud Run functions
+
+Extract customer feedback from Medallia Experience Cloud, land complete raw attempts, and validate a BigQuery snapshot. Then design authentication, checkpoints, replay, and reconciliation for recurring ingestion.
+
+- [x] [0054: Medallia feedback ingestion with GCP Cloud Functions](0054-medallia-cloud-functions-ingestion.md)
+
+The lesson includes a [bounded Python extractor](../examples/medallia-function/main.py), offline failure tests, an explicit BigQuery schema, and warehouse validation SQL. Cloud deployment requires a Medallia sandbox and a disposable GCP project.
 
 | Previous | Lesson catalog | Next |
 | --- | :---: | ---: |
